@@ -113,8 +113,8 @@
         harness (get-in timetable [:harnesses (:harness agent)])
         text    (get-in prompt-texts [(:prompt step) :text])]
     (try
-      {:command (plugins/build-command!
-                 config harness agent
+      {:command (plugins/step-command!
+                 config harness (:agent step) agent
                  (compose-prompt {:prompt-text text :spec spec :context context}))}
       (catch clojure.lang.ExceptionInfo e
         {:problem {:problem :command :step i :message (.getMessage e)}}))))

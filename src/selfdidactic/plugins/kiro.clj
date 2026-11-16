@@ -1,6 +1,7 @@
 (ns selfdidactic.plugins.kiro
   "Turn a kiro-cli harness/agent/prompt into the kiro-cli command."
-  (:require [selfdidactic.plugins.flags :as flags]))
+  (:require [clojure.data.json :as json]
+            [selfdidactic.plugins.flags :as flags]))
 
 (def exit-reasons
   "What kiro-cli's exit codes mean. 1, 3 and 4 are from Kiro's exit-codes
@@ -29,3 +30,11 @@
                       (flags/flag-args (:skill harness) (:skills agent))
                       (:extra-params harness)))
    :stdin prompt})
+
+(defn agent-profile [agent-id {:keys [model description system-prompt]}]
+  {:directory [".kiro" "agents"]
+   :suffix ".json"
+   :contents (json/write-str
+              {:model model
+               :description (or description (str "Switchyard agent " agent-id))
+               :prompt (or system-prompt "")})})

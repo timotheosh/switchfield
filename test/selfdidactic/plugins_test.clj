@@ -1,5 +1,6 @@
 (ns selfdidactic.plugins-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.data.json :as json]
+            [clojure.test :refer [deftest is testing]]
             [selfdidactic.config :as config]
             [selfdidactic.plugins :as sut]))
 
@@ -33,3 +34,27 @@
   (testing "no plugin configured fails loudly"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"No plugin configured"
                           (sut/exit-reasons {} {})))))
+
+(deftest step-commands-derive-native-profiles-from-the-agent
+  (let [agent {:model "m" :description "Reviews code" :system-prompt "Review carefully."}
+        profile #(-> (sut/step-command! {:plugin %} harness :reviewer agent "Task")
+                     :agent-profile)]
+    (is (= {:directory [".opencode" "agents"] :suffix ".md" :id "switchyard-reviewer"
+            :contents (str "---\nmode: primary\ndescription: \"Reviews code\""
+                           "\nmodel: \"m\"\n---\nReview carefully.\n")}
+           (profile "opencode")))
+    (let [{:keys [directory suffix contents]} (profile "kiro")]
+      (is (= [".kiro" "agents"] directory))
+      (is (= ".json" suffix))
+      (is (= {:model "m" :description "Reviews code" :prompt "Review carefully."}
+             (json/read-str contents :key-fn keyword))))
+    (doseq [extra [["--agent" "custom"] ["--agent=custom"]]]
+      (is (= {:argv (into ["opencode" "run" "-m" "m"] extra) :stdin "Task"}
+             (sut/step-command! {:plugin "opencode"}
+                                (assoc harness :extra-params extra)
+                                :reviewer agent "Task"))))))
+
+(deftest native-agent-names-include-the-namespace
+  (let [command #(sut/step-command! {:plugin "kiro"} harness % {:model "m"} "Task")]
+    (is (= "switchyard-team_2f_reviewer" (peek (:argv (command :team/reviewer)))))
+    (is (not= (:argv (command :team/reviewer)) (:argv (command :team_2f_reviewer))))))
