@@ -1,8 +1,10 @@
 (ns selfdidactic.plugins
   "Find the pieces of the configured plugin: the config's `plugin` key names a
   namespace under selfdidactic.plugins that defines `build-command`, returning
-  {:argv [...] :stdin text-or-nil}, and optionally `exit-reasons`, a map from
-  the harness's exit codes to reason keywords.")
+  {:argv [...] :stdin text-or-nil}, and optionally `agent-profile`, which
+  describes a native profile file, and `exit-reasons`, a map from
+  the harness's exit codes to reason keywords."
+  (:require [clojure.string :as str]))
 
 (defn- plugin-ns
   "Calculate the plugin namespace name for the config."
@@ -34,3 +36,21 @@
   (merge {}
          (some-> (symbol (plugin-ns config) "exit-reasons") requiring-resolve deref)
          (:exit-codes harness)))
+
+(defn- profile-name [agent-id]
+  (str "switchyard-"
+       (str/replace (subs (str agent-id) 1) #"[^a-z0-9-]"
+                    #(format "_%x_" (.codePointAt ^String % 0)))))
+
+(defn step-command!
+  "Build a command and attach a native profile when the plugin supports it."
+  [config harness agent-id agent prompt]
+  (let [command (build-command! config harness agent prompt)]
+    (if (some #(or (= "--agent" %) (str/starts-with? % "--agent=")) (:argv command))
+      command
+      (if-let [profile (ns-resolve (symbol (plugin-ns config)) 'agent-profile)]
+        (let [id (profile-name agent-id)]
+          (-> command
+              (update :argv into ["--agent" id])
+              (assoc :agent-profile (assoc (profile agent-id agent) :id id))))
+        command))))

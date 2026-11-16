@@ -10,10 +10,11 @@
             [selfdidactic.pipeline :as pipeline]
             [selfdidactic.plugins :as plugins]
             [selfdidactic.progress :as progress])
-  (:import [java.io File]
+  (:import [java.io File IOException]
            [java.net InetAddress]
-           [java.nio.file FileAlreadyExistsException Files OpenOption
-            StandardOpenOption]
+           [java.nio.file CopyOption FileAlreadyExistsException Files LinkOption
+            OpenOption StandardCopyOption StandardOpenOption]
+           [java.nio.file.attribute FileAttribute]
            [java.security MessageDigest]
            [java.time Instant ZoneOffset ZonedDateTime]
            [java.time.format DateTimeFormatter]))
@@ -136,6 +137,31 @@
 
 ;; -- Steps --------------------------------------------------------------
 
+(defn- write-agent-profile!
+  [work-dir {:keys [directory suffix contents id]}]
+  (let [no-follow (into-array LinkOption [LinkOption/NOFOLLOW_LINKS])
+        attributes (make-array FileAttribute 0)
+        dir (reduce (fn [parent segment]
+                      (let [path (.resolve parent ^String segment)]
+                        (try
+                          (Files/createDirectory path attributes)
+                          (catch FileAlreadyExistsException _
+                            (when-not (Files/isDirectory path no-follow)
+                              (throw (IOException. (str "Not a profile directory: " path))))))
+                        path))
+                    (.toPath (io/file work-dir)) directory)
+        path (.resolve dir (str id suffix))]
+    (when (and (Files/exists path no-follow)
+               (not (Files/isRegularFile path no-follow)))
+      (throw (IOException. (str "Not a regular profile file: " path))))
+    (let [temp (Files/createTempFile dir ".switchyard-" ".tmp" attributes)]
+      (try
+        (Files/writeString temp contents (make-array OpenOption 0))
+        (Files/move temp path (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
+                                                     StandardCopyOption/REPLACE_EXISTING]))
+        (finally
+          (Files/deleteIfExists temp))))))
+
 (defn- run-attempt!
   "One attempt: pre-snapshot, agent, post-snapshot, violations, restore when
   needed, then append the attempt to the record. The record is written after
@@ -146,12 +172,19 @@
   (let [agent (get-in timetable [:agents (:agent step)])
         harness (get-in timetable [:harnesses (:harness agent)])
         {:keys [command problem]} (pipeline/step-command ctx i step context)
+        launch-error (or (:message problem)
+                         (when-let [profile (:agent-profile command)]
+                           (try
+                             (write-agent-profile! work-dir profile)
+                             nil
+                             (catch IOException e
+                               (str "Cannot write agent profile: " (.getMessage e))))))
         watch   #(when worktree? (git/watch-snapshot root eb))
         before  (git/snapshot work-dir)
         wbefore (watch)
         gbefore (git/git-dir-hashes root)
-        run (if problem
-              {:process :harness-error :exit-code nil :out "" :err (:message problem)}
+        run (if launch-error
+              {:process :harness-error :exit-code nil :out "" :err launch-error}
               (harness/start (:argv command) work-dir
                              {:stdin (:stdin command)
                               :env {"GIT_DIR" "/nonexistent"}

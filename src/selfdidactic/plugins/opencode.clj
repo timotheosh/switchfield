@@ -1,6 +1,7 @@
 (ns selfdidactic.plugins.opencode
   "Turn an opencode harness/agent/prompt into the opencode command."
-  (:require [selfdidactic.plugins.flags :as flags]))
+  (:require [clojure.data.json :as json]
+            [selfdidactic.plugins.flags :as flags]))
 
 (def exit-reasons
   "What opencode's exit codes mean (probed against the real binary). It exits
@@ -28,3 +29,10 @@
                       (flags/flag-args (:skill harness) (:skills agent))
                       (:extra-params harness)))
    :stdin prompt})
+
+(defn agent-profile [agent-id {:keys [model description system-prompt]}]
+  {:directory [".opencode" "agents"]
+   :suffix ".md"
+   :contents (str "---\nmode: primary\ndescription: "
+                  (json/write-str (or description (str "Switchyard agent " agent-id)))
+                  "\nmodel: " (json/write-str model) "\n---\n" system-prompt "\n")})

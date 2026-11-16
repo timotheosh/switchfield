@@ -45,6 +45,16 @@ lists `:skills` is reported as a problem before anything runs.
 The model is `provider/model`. List what your install knows with
 `opencode models`. The provider needs credentials in `opencode auth`.
 
+For a timetable agent named `:reviewer`, Switchyard writes
+`.opencode/agents/switchyard-reviewer.md` in the run worktree, or in the
+checkout with `--no-worktree`. It refreshes the file before each launch,
+selects it with `--agent`, and leaves it available afterward. In the checkout,
+the retained file follows the usual Git dirty-checkout rules. The profile uses the
+agent's `:model` and optional `:description` and `:system-prompt`. Set
+`:system-prompt` to give the agent a role shared across pipeline steps. The
+step's task prompt still goes on stdin. An explicit `--agent` in
+`:extra-params` selects an existing profile instead.
+
 ## How it runs
 
 By default the agent's working directory is the run's own git worktree (see

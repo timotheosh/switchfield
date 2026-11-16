@@ -46,6 +46,16 @@ skills, attach `skill://` resources to a Kiro agent (see below).
 The model is a Kiro model id; list them with `kiro-cli chat --list-models`.
 An unknown model exits 1 and prints the available ids.
 
+For a timetable agent named `:reviewer`, Switchyard writes
+`.kiro/agents/switchyard-reviewer.json` in the run worktree, or in the
+checkout with `--no-worktree`. It refreshes the file before each launch,
+selects it with `--agent`, and leaves it available afterward. In the checkout,
+the retained file follows the usual Git dirty-checkout rules. The profile uses the
+agent's `:model` and optional `:description` and `:system-prompt`. Set
+`:system-prompt` to give the agent a role shared across pipeline steps. The
+step's task prompt still goes on stdin. An explicit `--agent` in
+`:extra-params` selects an existing profile instead.
+
 ## How it runs
 
 The agent's working directory is the run's git worktree (see "Run worktrees"
@@ -75,8 +85,7 @@ work, not as a crash. Pre-approve what the agent needs:
 
 ## Using a Kiro agent
 
-Switchyard has no per-agent field for Kiro agents; define one harness per Kiro
-agent and pass `--agent`:
+To select an existing Kiro profile, put `--agent` in the harness arguments:
 
 ```clojure
 {:harnesses

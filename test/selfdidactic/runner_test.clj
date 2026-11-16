@@ -5,6 +5,7 @@
             [clojure.test :refer [deftest is testing]]
             [selfdidactic.git :as git]
             [selfdidactic.git-test :as gt]
+            [selfdidactic.harness :as harness]
             [selfdidactic.pipeline :as pipeline]
             [selfdidactic.runner :as sut]
             [selfdidactic.timetable :as tt])
@@ -453,3 +454,65 @@
     (let [r (run-it! env {:impl (script-agent "cat >/dev/null; echo m > src/m.clj")} [step-impl])]
       (is (= :success (:status r)))
       (is (= [] (:violations (first (attempts r))))))))
+
+(defn- run-native! [env plugin prompt]
+  (run-it! env {} [step-impl]
+           {:config {:plugin plugin}
+            :timetable {:harnesses {:fake {:command plugin :model {:parameter "-m"}}}
+                        :agents {:impl (script-agent "m" :system-prompt prompt
+                                                     :max-violation-retries 0)}
+                        :prompts {:p {:path "p.md"}}
+                        :pipelines {:dev {:steps [step-impl]}}}}))
+
+(deftest retains-and-refreshes-native-agents
+  (doseq [[plugin directory suffix] [["opencode" ".opencode" ".md"]
+                                     ["kiro" ".kiro" ".json"]]]
+    (let [{:keys [root] :as env} (setup!)
+          profile (io/file root directory "agents" (str "switchyard-impl" suffix))
+          other (io/file root directory "agents" (str "manual" suffix))
+          start harness/start
+          action (atom :ok)]
+      (io/make-parents other)
+      (spit other "manual profile")
+      (with-redefs [harness/start
+                    (fn [argv work-dir & [{:keys [stdin] :as options}]]
+                      (if (= plugin (first argv))
+                        (do
+                          (is (= ["--agent" "switchyard-impl"] (vec (take-last 2 argv))))
+                          (is (str/starts-with? stdin "PROMPT"))
+                          (is (.isFile profile))
+                          (when (= :tamper @action) (spit profile "changed by agent"))
+                          (if (= :crash @action)
+                            {:process :crashed :exit-code 1 :out "" :err "crash"}
+                            {:process :ok :exit-code 0 :out "" :err ""}))
+                        (start argv work-dir options)))]
+        (let [result (run-native! env plugin "First instructions")]
+          (is (= :success (:status result)))
+          (is (= [] (:changed (first (attempts result)))))
+          (is (str/includes? (slurp profile) "First instructions")))
+        (reset! action :crash)
+        (is (= :step-failed (:status (run-native! env plugin "Updated instructions"))))
+        (is (str/includes? (slurp profile) "Updated instructions"))
+        (reset! action :tamper)
+        (is (= :violations (:status (run-native! env plugin "Restored instructions"))))
+        (is (str/includes? (slurp profile) "Restored instructions"))
+        (is (= "manual profile" (slurp other)))
+        (is (= #{(.getName other) (.getName profile)}
+               (set (.list (.getParentFile profile)))))))))
+
+(deftest rejects-symlinked-native-profile-paths
+  (doseq [relative [".kiro" ".kiro/agents/switchyard-impl.json"]]
+    (let [{:keys [root] :as env} (setup!)
+          path (io/file root relative)
+          target (io/file root "README.md")]
+      (spit target "untouched")
+      (io/make-parents path)
+      (java.nio.file.Files/createSymbolicLink
+       (.toPath path) (.toPath target)
+       (make-array java.nio.file.attribute.FileAttribute 0))
+      (let [result (run-native! env "kiro" "Instructions")
+            attempt (first (attempts result))]
+        (is (= :step-failed (:status result)))
+        (is (= :harness-error (:process attempt)))
+        (is (str/includes? (:err attempt) "Cannot write agent profile"))
+        (is (= "untouched" (slurp target)))))))
