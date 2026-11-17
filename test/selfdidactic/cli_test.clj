@@ -12,17 +12,19 @@
 (def expected-help
   (str "Usage: switchyard [options]\n\n"
        "Options:\n"
-       "  -h, --help           Show this help\n"
-       "  -v, --version        Show program version\n"
-       "  -s, --spec PATH      Path to a Markdown or Org specification document\n"
-       "  -c, --config PATH    path to toml config file\n"
-       "      --validate       validate configuration and print it in edn format\n"
-       "      --pipeline NAME  run the named pipeline from the branch's timetable\n"
-       "      --force-unlock   clear a stale run lock before running\n"
-       "      --[no-]worktree  run in a new git worktree (the default), or in place\n"
-       "      --run-id ID      name the run; re-use that run's worktree if it exists\n"
-       "      --allow-dirty    start although the checkout has uncommitted changes\n"
-       "      --headless       no progress line on the terminal (log output is unchanged)\n"))
+       "  -h, --help             Show this help\n"
+       "  -v, --version          Show program version\n"
+       "  -s, --spec PATH        Path to a Markdown or Org specification document\n"
+       "  -c, --config PATH      path to toml config file\n"
+       "      --validate         validate configuration and print it in edn format\n"
+       "      --pipeline NAME    run the named pipeline from the branch's timetable\n"
+       "      --generate-agents  with --pipeline: write the pipeline's agent profile files to the current directory, without running\n"
+       "      --existing MODE    with --generate-agents: overwrite (default), skip, or ask about each existing agent file\n"
+       "      --force-unlock     clear a stale run lock before running\n"
+       "      --[no-]worktree    run in a new git worktree (the default), or in place\n"
+       "      --run-id ID        name the run; re-use that run's worktree if it exists\n"
+       "      --allow-dirty      start although the checkout has uncommitted changes\n"
+       "      --headless         no progress line on the terminal (log output is unchanged)\n"))
 
 (def expected-version "switchyard 0.1.0-SNAPSHOT\n")
 
@@ -332,6 +334,13 @@
     (testing "the flag beats the config file, either way"
       (is (false? (:worktree? (resolve ["--pipeline" "dev" "--no-worktree"] {:spec "s.md" :worktree true}))))
       (is (true? (:worktree? (resolve ["--pipeline" "dev" "--worktree"] {:spec "s.md" :worktree false})))))
+    (testing "--generate-agents needs --pipeline and skips the run"
+      (is (= :generate-agents (:kind (resolve ["--pipeline" "dev" "--generate-agents"] {:spec "s.md"}))))
+      (is (= :usage-error (:kind (resolve ["--generate-agents"] {:spec "s.md"})))))
+    (testing "--existing defaults to overwrite and is validated"
+      (is (= "overwrite" (:existing (resolve ["--pipeline" "dev" "--generate-agents"] {:spec "s.md"}))))
+      (is (= "ask" (:existing (resolve ["--pipeline" "dev" "--generate-agents" "--existing" "ask"] {:spec "s.md"}))))
+      (is (= :usage-error (:kind (sut/parse-command ["--existing" "bogus"])))))
     (testing "--headless is carried through"
       (is (true? (:headless? (resolve ["--pipeline" "dev" "--headless"] {:spec "s.md"})))))
     (testing "--run-id and --allow-dirty are carried through"
