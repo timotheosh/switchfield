@@ -55,6 +55,12 @@ agent's `:model` and optional `:description` and `:system-prompt`. Set
 step's task prompt still goes on stdin. An explicit `--agent` in
 `:extra-params` selects an existing profile instead.
 
+To write the profile files ahead of a run, or to check them in, use
+`switchyard --pipeline NAME --generate-agents`. It writes the files for every
+agent in the pipeline into the checkout without running it. `--existing
+overwrite|skip|ask` chooses what happens to files already there (default
+`overwrite`). See the README.
+
 ## How it runs
 
 By default the agent's working directory is the run's own git worktree (see
