@@ -137,7 +137,8 @@
 
 ;; -- Steps --------------------------------------------------------------
 
-(defn- write-agent-profile!
+(defn write-agent-profile!
+  "Write a plugin's native profile file under work-dir; returns its path."
   [work-dir {:keys [directory suffix contents id]}]
   (let [no-follow (into-array LinkOption [LinkOption/NOFOLLOW_LINKS])
         attributes (make-array FileAttribute 0)
@@ -160,7 +161,27 @@
         (Files/move temp path (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
                                                      StandardCopyOption/REPLACE_EXISTING]))
         (finally
-          (Files/deleteIfExists temp))))))
+          (Files/deleteIfExists temp))))
+    (str path)))
+
+(defn generate-agent-profiles!
+  "Write the profile of every agent the pipeline uses into root, without
+  running anything. Returns the written paths (empty when the plugin has no
+  profiles). ctx: :config :timetable :pipeline-name :root, and optionally
+  :overwrite? (fn [path] bool), asked only for files that already exist;
+  default overwrites everything. Skipped files are left out of the result."
+  [{:keys [config timetable pipeline-name root overwrite?] :or {overwrite? (constantly true)}}]
+  (when-not (get-in timetable [:pipelines pipeline-name])
+    (throw (ex-info (str "unknown pipeline: " (name pipeline-name)) {})))
+  (vec (for [id (distinct (keep :agent (get-in timetable [:pipelines pipeline-name :steps])))
+             :let [agent   (get-in timetable [:agents id])
+                   harness (get-in timetable [:harnesses (:harness agent)])
+                   profile (:agent-profile (plugins/step-command! config harness id agent "-"))]
+             :when profile
+             :let [{:keys [directory suffix id]} profile
+                   target (str (apply io/file root (conj (vec directory) (str id suffix))))]
+             :when (or (not (.exists (io/file target))) (overwrite? target))]
+         (write-agent-profile! root profile))))
 
 (defn- run-attempt!
   "One attempt: pre-snapshot, agent, post-snapshot, violations, restore when

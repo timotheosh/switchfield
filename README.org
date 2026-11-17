@@ -59,11 +59,19 @@ switchyard 0.1.0-SNAPSHOT
 :CUSTOM_ID: options
 :END:
 #+begin_example
--h, --help         Show help for using the program
--v, --version      Show the program version
--s, --spec PATH    Path to a Markdown or Org specification document
--c, --config PATH  path to toml config file
-    --validate     validate configuration and print it in edn format
+-h, --help             Show help for using the program
+-v, --version          Show the program version
+-s, --spec PATH        Path to a Markdown or Org specification document
+-c, --config PATH      path to toml config file
+    --validate         validate configuration and print it in edn format
+    --pipeline NAME    run the named pipeline from the branch's timetable
+    --generate-agents  with --pipeline: write the pipeline's agent profile files, without running
+    --existing MODE    with --generate-agents: overwrite (default), skip, or ask about each existing agent file
+    --force-unlock     clear a stale run lock before running
+    --[no-]worktree    run in a new git worktree (the default), or in place
+    --run-id ID        name the run; re-use that run's worktree if it exists
+    --allow-dirty      start although the checkout has uncommitted changes
+    --headless         no progress line on the terminal (log output is unchanged)
 #+end_example
 
 Help takes precedence over every other option (even with an unreadable
@@ -193,6 +201,32 @@ Git cannot see an empty directory, so the orchestrator recreates any writes
 directory an agent removed or a rollback pruned; integrity of a directory means
 its files.
 
+*** Generating agent profiles
+:PROPERTIES:
+:CUSTOM_ID: generating-agent-profiles
+:END:
+#+begin_example
+$ clojure -M:run-m --pipeline development --generate-agents
+#+end_example
+
+Plugins that use native agent profiles (kiro, opencode) normally write them
+at the start of each step. =--generate-agents= writes the profile of every
+agent the named pipeline uses into the project root and exits without running
+anything: no worktree, lock or run record. It prints the paths written, and
+writes nothing for a plugin without profiles. It requires =--pipeline= and
+reads the same timetable and =plugin= setting as a run. The files are the
+same ones a run would write, so they can be committed or hand-edited ahead
+of time.
+
+=--existing MODE= says what to do with a profile file that already exists:
+
+- =overwrite= (the default) replaces every file.
+- =skip= keeps existing files and leaves them out of the output.
+- =ask= prompts =<path> exists. Overwrite? [y/N]= on stderr for each existing
+  file; only =y= or =yes= overwrites.
+
+Note that a normal run still refreshes its own profile before each launch.
+
 *** Run worktrees
 By default each run happens in its own git worktree, so agents never touch
 your checkout:
@@ -311,11 +345,17 @@ matching row wins:
 
 - =0=: help, version, or the configuration was displayed.
 - =1=: the config file is missing or invalid, required configuration is
-  missing under =--validate=, or =--validate= could not load the
-  specification (unsupported format, unavailable, or unreadable).
+  missing under =--validate=, =--validate= could not load the
+  specification (unsupported format, unavailable, or unreadable), or a
+  pipeline could not start (unknown pipeline, timetable problems).
 - =2=: the command line is invalid, such as an unknown option, missing option
   value, positional argument, repeated =--spec=, or missing required
-  configuration when other arguments are given.
+  configuration when other arguments are given. This includes
+  =--generate-agents= without =--pipeline= and an =--existing= value other
+  than =overwrite=, =skip= or =ask=.
+- =3=: a pipeline step's agent process failed, timed out or could not start.
+- =4=: a step kept violating its write jurisdiction (or tampered with git)
+  until its retries ran out.
 
 ** Development
 :PROPERTIES:

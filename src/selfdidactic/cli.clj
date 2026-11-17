@@ -43,6 +43,9 @@
    ["-c" "--config PATH" "path to toml config file"]
    [nil "--validate" "validate configuration and print it in edn format"]
    [nil "--pipeline NAME" "run the named pipeline from the branch's timetable"]
+   [nil "--generate-agents" "with --pipeline: write the pipeline's agent profile files to the current directory, without running"]
+   [nil "--existing MODE" "with --generate-agents: overwrite (default), skip, or ask about each existing agent file"
+    :validate [#{"overwrite" "skip" "ask"} "must be overwrite, skip or ask"]]
    [nil "--force-unlock" "clear a stale run lock before running"]
    [nil "--[no-]worktree" "run in a new git worktree (the default), or in place"]
    [nil "--run-id ID" "name the run; re-use that run's worktree if it exists"]
@@ -122,6 +125,8 @@
        :config-path (:config options)
        :pipeline (:pipeline options)
        :force-unlock? (boolean (:force-unlock options))
+       :generate-agents? (boolean (:generate-agents options))
+       :existing (or (:existing options) "overwrite")
        :worktree (:worktree options)
        :run-id (:run-id options)
        :allow-dirty? (boolean (:allow-dirty options))
@@ -132,7 +137,7 @@
   "Calculate what to do from a parsed :run command and the file config.
   First matching row wins, top to bottom."
   [{:keys [usage no-args? validate? config-path overrides pipeline force-unlock?
-           worktree run-id allow-dirty? headless?]}
+           worktree run-id allow-dirty? headless? generate-agents? existing]}
    file-config]
   (let [config (config/merge-overrides file-config overrides)
         missing (config/missing-keys config/required-keys config)
@@ -156,6 +161,14 @@
 
       (and pipeline (contains? config :worktree) (not (boolean? (:worktree config))))
       {:kind :config-error :message "`worktree` must be true or false in the config file"}
+
+      (and generate-agents? (not pipeline))
+      {:kind :usage-error :errors ["Option --generate-agents requires --pipeline."]
+       :usage usage}
+
+      generate-agents?
+      {:kind :generate-agents :config config :pipeline-name (keyword pipeline)
+       :existing existing}
 
       pipeline
       {:kind :run-pipeline :config config :pipeline-name (keyword pipeline)
@@ -301,6 +314,31 @@
     (catch IOException exception
       (error-response (.getMessage exception)))))
 
+(defn- ask-overwrite?
+  [path]
+  (binding [*out* *err*]
+    (print (str path " exists. Overwrite? [y/N] "))
+    (flush))
+  (boolean (some->> (read-line) str/trim str/lower-case #{"y" "yes"})))
+
+(defn- generate-agents-response!
+  [{:keys [config pipeline-name existing]}]
+  (try
+    (let [root (git/toplevel ".")
+          dir  (pipeline/timetable-dir root (git/branch root))
+          paths (runner/generate-agent-profiles!
+                 {:config config :pipeline-name pipeline-name
+                  :timetable (timetable/load-dir dir) :root root
+                  :overwrite? (case existing
+                                "skip" (constantly false)
+                                "ask" ask-overwrite?
+                                (constantly true))})]
+      {:exit-code 0 :stdout (str/join "\n" paths)})
+    (catch clojure.lang.ExceptionInfo exception
+      (error-response (.getMessage exception)))
+    (catch IOException exception
+      (error-response (.getMessage exception)))))
+
 (defn execute-command!
   "Perform a command and return response data."
   [{:keys [kind usage config message] :as command}]
@@ -314,6 +352,7 @@
     :config-error (error-response message)
     :show (show-response config)
     :validate (validate-response! command)
+    :generate-agents (generate-agents-response! command)
     :run-pipeline (run-pipeline-response! command)))
 
 (defn emit-response!
