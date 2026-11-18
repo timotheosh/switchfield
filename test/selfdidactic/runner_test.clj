@@ -516,3 +516,23 @@
         (is (= :harness-error (:process attempt)))
         (is (str/includes? (:err attempt) "Cannot write agent profile"))
         (is (= "untouched" (slurp target)))))))
+
+(deftest command-step
+  (let [env (setup!)
+        ok  {:command {:args ["sh" "-c" "echo hi > src/made.txt"] :artifact "src/made.txt"}}
+        r   (run-it! env {:impl (script-agent "cat >/dev/null")} [ok])]
+    (is (= :success (:status r)))
+    (is (= "hi\n" (slurp (io/file (:root env) "src/made.txt"))) "runs in the work dir")
+    (is (= [:command] (map :agent (attempts r)))))
+  (testing "a non-zero exit fails the step and stops the run"
+    (let [env (setup!)
+          r   (run-it! env {} [{:command {:args ["sh" "-c" "exit 3"]}} {:command {:args ["true"]}}])]
+      (is (= :step-failed (:status r)))
+      (is (= 0 (:step r)))))
+  (testing "zero exit without the declared artifact fails the step"
+    (let [r (run-it! (setup!) {} [{:command {:args ["true"] :artifact "out.txt"}}])]
+      (is (= :step-failed (:status r)))
+      (is (= "out.txt" (:missing-artifact (first (attempts r)))))))
+  (testing "a malformed command is a problem before anything runs"
+    (let [r (run-it! (setup!) {} [{:command ["make" "test"]}])]
+      (is (= [:bad-command] (map :problem (:problems r)))))))

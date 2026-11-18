@@ -192,7 +192,9 @@
   [{:keys [root work-dir eb timetable writes worktree?] :as ctx} i step n context record]
   (let [agent (get-in timetable [:agents (:agent step)])
         harness (get-in timetable [:harnesses (:harness agent)])
-        {:keys [command problem]} (pipeline/step-command ctx i step context)
+        {:keys [command problem]} (if (pipeline/command-step? step)
+                                    {:command {:argv (get-in step [:command :args])}}
+                                    (pipeline/step-command ctx i step context))
         launch-error (or (:message problem)
                          (when-let [profile (:agent-profile command)]
                            (try
@@ -209,9 +211,14 @@
               (harness/start (:argv command) work-dir
                              {:stdin (:stdin command)
                               :env {"GIT_DIR" "/nonexistent"}
-                              :exit-reasons (plugins/exit-reasons (:config ctx) harness)
-                              :timeout-ms (or (:timeout-ms agent)
+                              :exit-reasons (when harness
+                                              (plugins/exit-reasons (:config ctx) harness))
+                              :timeout-ms (or (:timeout-ms step) (:timeout-ms agent)
                                               pipeline/default-timeout-ms)}))
+        artifact (get-in step [:command :artifact])
+        missing-artifact (when (and artifact (= :ok (:process run))
+                                    (not (.exists (io/file work-dir artifact))))
+                           artifact)
         after   (git/snapshot work-dir)
         wafter  (watch)
         gafter  (git/git-dir-hashes root)
@@ -232,12 +239,13 @@
               (git/restore-tree! root (:state wbefore) (:state wafter))))
         recreated (ensure-dirs! work-dir writes)
         entry (merge run
-                     {:entry :attempt :step i :agent (:agent step) :attempt n
+                     {:entry :attempt :step i :agent (pipeline/step-label step) :attempt n
                       :argv (:argv command) :stdin (:stdin command)
                       :before before :after after :changed changed
                       :writes-trees {:before (git/dir-trees work-dir before writes)
                                      :after  (git/dir-trees work-dir after writes)}
                       :recreated-dirs recreated
+                      :missing-artifact missing-artifact
                       :verdict :none :violations violations
                       :restored? retryable?
                       :stopped? (boolean (some pipeline/stop-violation? violations))
@@ -252,8 +260,9 @@
   at once. Returns the last attempt with :step-status."
   [ctx i step record]
   (let [agent (get-in (:timetable ctx) [:agents (:agent step)])
-        bound (or (:max-violation-retries agent)
-                  pipeline/default-max-violation-retries)]
+        bound (cond (pipeline/command-step? step) 0 ; nothing to tell a command
+                    :else (or (:max-violation-retries agent)
+                              pipeline/default-max-violation-retries))]
     (loop [n 0 context {}]
       (let [entry (run-attempt! ctx i step n context record)]
         (cond
@@ -281,7 +290,7 @@
 (defn- run-stage!
   "Run step i, announcing its start and end."
   [ctx i step record total]
-  (let [agent (:agent step)
+  (let [agent (pipeline/step-label step)
         event #(hash-map :index i :total total :agent agent :phase %)]
     (announce! ctx (pipeline/stage-started-message i total agent) (event :running))
     (let [entry (run-step! ctx i step record)

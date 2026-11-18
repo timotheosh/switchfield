@@ -17,7 +17,19 @@
 
 (def default-max-violation-retries 2)
 
-(def step-keys #{:agent :prompt})
+(def step-keys #{:agent :prompt :command :timeout-ms})
+
+(def agent-step-keys #{:agent :prompt})
+
+(defn command-step?
+  "A step with :command runs that argv directly instead of an agent."
+  [step]
+  (contains? step :command))
+
+(defn step-label
+  "Calculate the name a step goes by in logs and the run record."
+  [step]
+  (or (:agent step) :command))
 
 ;; -- Branch directory ---------------------------------------------------
 
@@ -158,12 +170,12 @@
           :when (overlaps? p1 p2)]
       {:problem :overlapping-writes :agents [n1 n2] :prefixes [p1 p2]})))
 
-(defn- reference-problems [timetable prompt-texts i step]
+(defn- agent-reference-problems [timetable prompt-texts i step]
   (let [agent-name (:agent step)
         agent      (get-in timetable [:agents agent-name])
         prompt     (:prompt step)]
     (concat
-     (for [k (keys step) :when (not (step-keys k))]
+     (for [k (keys step) :when (not (agent-step-keys k))]
        {:problem :unsupported-step-key :step i :key k})
      (when-not agent
        [{:problem :unknown-agent :step i :agent agent-name}])
@@ -177,6 +189,28 @@
        (:error (get prompt-texts prompt))
        [{:problem :unreadable-prompt :step i :prompt prompt
          :message (:error (get prompt-texts prompt))}]))))
+
+(defn- command-step-problems [i step]
+  (let [{:keys [args artifact] :as command} (:command step)]
+    (concat
+     (for [k (keys step) :when (not (#{:command :timeout-ms} k))]
+       {:problem :unsupported-step-key :step i :key k})
+     (when-not (and (map? command) (vector? args) (seq args) (every? string? args))
+       [{:problem :bad-command :step i :command command}])
+     (for [k (keys (when (map? command) command)) :when (not (#{:args :artifact} k))]
+       {:problem :unsupported-command-key :step i :key k})
+     (when (and (contains? command :artifact)
+                (not (and (string? artifact) (seq artifact)
+                          (not (str/starts-with? artifact "/"))
+                          (not (str/includes? artifact "..")))))
+       [{:problem :bad-artifact :step i :artifact artifact}])
+     (when (and (contains? step :timeout-ms) (not (pos-int? (:timeout-ms step))))
+       [{:problem :bad-timeout :step i :timeout-ms (:timeout-ms step)}]))))
+
+(defn- reference-problems [timetable prompt-texts i step]
+  (if (command-step? step)
+    (command-step-problems i step)
+    (agent-reference-problems timetable prompt-texts i step)))
 
 (defn- agent-problems [timetable steps]
   (let [names  (distinct (keep :agent steps))
@@ -193,7 +227,8 @@
   "Calculate the plugin's problems, for steps whose references are sound."
   [ctx i step]
   (let [{:keys [timetable prompt-texts]} ctx]
-    (when (empty? (reference-problems timetable prompt-texts i step))
+    (when (and (not (command-step? step))
+               (empty? (reference-problems timetable prompt-texts i step)))
       (let [{:keys [command problem]} (step-command ctx i step {})]
         (cond
           problem [problem]
@@ -293,11 +328,11 @@
 (defn step-violations
   "Calculate all violations of one step attempt."
   [agent before after changed parsed]
-  (vec (concat (jurisdiction-violations (:writes agent) changed)
+  (vec (concat (when agent (jurisdiction-violations (:writes agent) changed))
                (git/tamper-violations before after)
                (when (and (:must-change agent) (empty? changed))
                  [{:violation :no-work}])
-               (output-violations agent parsed))))
+               (when agent (output-violations agent parsed)))))
 
 (def stop-kinds
   "Violations that end the run instead of rolling the step back: they happen
@@ -323,8 +358,8 @@
 (defn step-continues?
   "A step lets the run continue only on a clean process outcome and no
   violations. A verdict is never a failure."
-  [{:keys [process violations]}]
-  (and (= :ok process) (empty? violations)))
+  [{:keys [process violations missing-artifact]}]
+  (and (= :ok process) (empty? violations) (not missing-artifact)))
 
 (defn canonical
   "Calculate the value with every map sorted, so its printed form is stable."
