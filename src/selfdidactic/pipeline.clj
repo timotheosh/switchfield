@@ -19,6 +19,28 @@
 
 (def step-keys #{:agent :prompt :command :timeout-ms})
 
+(def default-capture-max -8000)
+
+(defn capture-text
+  "Calculate the text a :capture setting selects from a run's result."
+  [capture {:keys [out err]}]
+  (case capture :stdout out :stderr err :both out nil))
+
+(defn clip-output
+  "Calculate s clipped to n characters: the first n when n is positive, the
+  last |n| when negative (a failure is usually at the end)."
+  [s n]
+  (let [c (count s) k (abs n)]
+    (cond (<= c k) s
+          (pos? n) (subs s 0 k)
+          :else    (subs s (- c k)))))
+
+(defn command-verdict
+  "Calculate the verdict of a failed command step that captures output."
+  [{:keys [artifact capture-max]} run]
+  {:exit-code (:exit-code run)
+   :output (clip-output (capture-text artifact run) (or capture-max default-capture-max))})
+
 (def agent-step-keys #{:agent :prompt})
 
 (defn command-step?
@@ -190,6 +212,13 @@
        [{:problem :unreadable-prompt :step i :prompt prompt
          :message (:error (get prompt-texts prompt))}]))))
 
+(def streams #{:stdout :stderr :both})
+
+(defn stream?
+  "An :artifact that names output to capture, not a file that must exist."
+  [artifact]
+  (contains? streams artifact))
+
 (defn- command-step-problems [i step]
   (let [{:keys [args artifact] :as command} (:command step)]
     (concat
@@ -197,13 +226,16 @@
        {:problem :unsupported-step-key :step i :key k})
      (when-not (and (map? command) (vector? args) (seq args) (every? string? args))
        [{:problem :bad-command :step i :command command}])
-     (for [k (keys (when (map? command) command)) :when (not (#{:args :artifact} k))]
+     (for [k (keys (when (map? command) command)) :when (not (#{:args :artifact :capture-max} k))]
        {:problem :unsupported-command-key :step i :key k})
      (when (and (contains? command :artifact)
-                (not (and (string? artifact) (seq artifact)
-                          (not (str/starts-with? artifact "/"))
-                          (not (str/includes? artifact "..")))))
+                (not (or (stream? artifact)
+                         (and (string? artifact) (seq artifact)
+                              (not (str/starts-with? artifact "/"))
+                              (not (str/includes? artifact ".."))))))
        [{:problem :bad-artifact :step i :artifact artifact}])
+     (when (and (contains? command :capture-max) (not (and (int? (:capture-max command)) (not (zero? (:capture-max command))))))
+       [{:problem :bad-capture-max :step i :capture-max (:capture-max command)}])
      (when (and (contains? step :timeout-ms) (not (pos-int? (:timeout-ms step))))
        [{:problem :bad-timeout :step i :timeout-ms (:timeout-ms step)}]))))
 

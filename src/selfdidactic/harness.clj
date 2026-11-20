@@ -22,7 +22,7 @@
   [exception]
   {:process :harness-error :exit-code nil :out "" :err (.getMessage exception)})
 
-(defn- builder ^ProcessBuilder [argv dir env in out err]
+(defn- builder ^ProcessBuilder [argv dir env in out err merge-err?]
   (let [pb (ProcessBuilder. ^java.util.List (vec argv))]
     (.directory pb (File. ^String dir))
     ;; ProcessBuilder changes the child's directory but leaves the inherited
@@ -32,7 +32,9 @@
     (doseq [[k v] env] (.put (.environment pb) k v))
     (.redirectInput pb (if in (ProcessBuilder$Redirect/from in) ProcessBuilder$Redirect/INHERIT))
     (.redirectOutput pb (ProcessBuilder$Redirect/to out))
-    (.redirectError pb (ProcessBuilder$Redirect/to err))
+    (if merge-err?
+      (.redirectErrorStream pb true)
+      (.redirectError pb (ProcessBuilder$Redirect/to err)))
     pb))
 
 (defn- kill-tree!
@@ -57,8 +59,8 @@
 (defn- run-in-files!
   "Run the builder's process with stdin from `in` (or nil), output captured in
   the temp files, so a chatty child can never block on a full pipe."
-  [argv dir {:keys [env timeout-ms exit-reasons]} ^File in ^File out ^File err]
-  (let [process (.start (builder argv dir env in out err))
+  [argv dir {:keys [env timeout-ms exit-reasons merge-err?]} ^File in ^File out ^File err]
+  (let [process (.start (builder argv dir env in out err merge-err?))
         timed-out? (await-exit! process timeout-ms)]
     (classify {:exit (.exitValue process) :out (slurp out) :err (slurp err)
                :timed-out? timed-out?}
@@ -67,7 +69,8 @@
 (defn start
   "Run argv in dir and return its classified result. Options: :stdin text for
   the child, :env extra environment, :timeout-ms (none when nil),
-  :exit-reasons {exit-code reason} naming a crash. A command
+  :exit-reasons {exit-code reason} naming a crash, :merge-err? to interleave
+  stderr into stdout (as 2>&1). A command
   that cannot be started is a :harness-error result."
   ([argv dir] (start argv dir {}))
   ([argv dir {:keys [stdin] :as options}]
