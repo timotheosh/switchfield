@@ -174,6 +174,14 @@ directory with no agent. A non-zero exit or timeout fails the step. With an
 exist afterwards; without one, a zero exit is success. There are no =:writes=,
 so only the git tamper check applies, and the step is never retried.
 
+An =:artifact= is a file path /or/ a stream to capture, never both: =:stdout=,
+=:stderr= or =:both= (interleaved as =2>&1=) saves the
+full output to =.switchyard/<branch>/runs/<run-id>/step-<n>.log= (path in the
+attempt's =:log=). When the step fails, its verdict also carries
+=:output=, the clipped text (={:exit-code n :output "..."}=). =:capture-max= is a character count: a
+negative number keeps the last n characters (default =-8000=), a positive one
+the first n; on success there is no verdict.
+
 *** Verdicts and redirects
 A step can send the run back to an earlier agent:
 
