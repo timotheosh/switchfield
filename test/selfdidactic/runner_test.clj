@@ -563,3 +563,25 @@
     (testing "without :redirect a failing command still fails the step"
       (let [r (run-it! (setup!) {:impl impl} [step-impl {:command {:args ["false"]}}])]
         (is (= :step-failed (:status r)))))))
+
+(deftest command-capture
+  (let [script "echo out; echo err >&2; exit 1"
+        run   (fn [cmd] (run-it! (setup!) {} [{:command (merge {:args ["sh" "-c" script]} cmd)}]))
+        a     (fn [r] (first (attempts r)))]
+    (testing "the verdict of a failure carries the tail; the full log is saved"
+      (let [e (a (run {:artifact :both :capture-max -4}))]
+        (is (= {:exit-code 1 :output "err\n"} (:verdict e)))
+        (is (= "out\nerr\n" (slurp (:log e))) "both streams, interleaved")))
+    (testing "a positive :capture-max keeps the head"
+      (is (= "out\n" (:output (:verdict (a (run {:artifact :both :capture-max 4})))))))
+    (testing "one stream only"
+      (is (= "err\n" (slurp (:log (a (run {:artifact :stderr})))))))
+    (testing "success saves the log but leaves the verdict out"
+      (let [e (a (run-it! (setup!) {} [{:command {:args ["echo" "hi"] :artifact :stdout}}]))]
+        (is (nil? (:verdict e)))
+        (is (= "hi\n" (slurp (:log e))))))
+    (testing "without :capture nothing is saved"
+      (is (nil? (:log (a (run {}))))))
+    (testing "bad settings are problems"
+      (is (= [:bad-artifact :bad-capture-max]
+             (map :problem (:problems (run {:artifact :out :capture-max 0}))))))))

@@ -183,15 +183,26 @@
              :when (or (not (.exists (io/file target))) (overwrite? target))]
          (write-agent-profile! root profile))))
 
+(defn- write-step-log!
+  "Save a step's full captured output under the run's directory; its path."
+  [dir run-id i text]
+  (let [f (io/file dir "runs" run-id (str "step-" i ".log"))]
+    (io/make-parents f)
+    (spit f text)
+    (str f)))
+
 (defn- run-attempt!
   "One attempt: pre-snapshot, agent, post-snapshot, violations, restore when
   needed, then append the attempt to the record. The record is written after
   the restore so a tampering agent cannot roll back the runner's own entry.
   The agent runs in work-dir (a run worktree, or the project root); in a
   worktree run the runner's state and the main checkout are watched too."
-  [{:keys [root work-dir eb timetable writes worktree?] :as ctx} i step n context record]
+  [{:keys [root dir run-id work-dir eb timetable writes worktree?] :as ctx} i step n context record]
   (let [agent (get-in timetable [:agents (:agent step)])
         harness (get-in timetable [:harnesses (:harness agent)])
+        cmd     (when (map? (:command step)) (:command step))
+        capture (when (pipeline/stream? (:artifact cmd)) (:artifact cmd))
+        artifact (when (string? (:artifact cmd)) (:artifact cmd))
         {:keys [command problem]} (if (pipeline/command-step? step)
                                     {:command {:argv (get-in step [:command :args])}}
                                     (pipeline/step-command ctx i step context))
@@ -211,14 +222,16 @@
               (harness/start (:argv command) work-dir
                              {:stdin (:stdin command)
                               :env {"GIT_DIR" "/nonexistent"}
+                              :merge-err? (= :both capture)
                               :exit-reasons (when harness
                                               (plugins/exit-reasons (:config ctx) harness))
                               :timeout-ms (or (:timeout-ms step) (:timeout-ms agent)
                                               pipeline/default-timeout-ms)}))
-        artifact (get-in step [:command :artifact])
         missing-artifact (when (and artifact (= :ok (:process run))
                                     (not (.exists (io/file work-dir artifact))))
                            artifact)
+        log     (when (and capture (not launch-error))
+                  (write-step-log! dir run-id i (pipeline/capture-text capture run)))
         after   (git/snapshot work-dir)
         wafter  (watch)
         gafter  (git/git-dir-hashes root)
@@ -246,6 +259,7 @@
                                      :after  (git/dir-trees work-dir after writes)}
                       :recreated-dirs recreated
                       :missing-artifact missing-artifact
+                      :log log
                       :verdict (pipeline/step-verdict step (assoc run :missing-artifact missing-artifact) parsed)
                       :violations violations
                       :restored? retryable?
