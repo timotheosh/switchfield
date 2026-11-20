@@ -1,7 +1,10 @@
 {:pipelines
  {:development
-  ;; Steps run in order and stop at the first failure. Reviewer findings are
-  ;; recorded in the run record but not yet routed back to earlier steps.
+  ;; Steps run in order and stop at the first failure. A step with :verdict
+  ;; and :redirect sends the run back when the reviewer reports findings: it
+  ;; jumps to the nearest earlier step run by :redirect :agent (with the
+  ;; findings in its prompt) and replays forward, at most :max times (default
+  ;; 2) before the run ends with exit 5.
   {:steps
    [{:agent :test-writer
      :prompt :test-writer}
@@ -10,10 +13,14 @@
      :prompt :implementer}
 
     {:agent :reviewer
-     :prompt :correctness-review}
+     :prompt :correctness-review
+     :verdict :findings
+     :redirect {:agent :implementer}}
 
     {:agent :reviewer
-     :prompt :maintainability-review}
+     :prompt :maintainability-review
+     :verdict :findings
+     :redirect {:agent :implementer :max 1}}
 
     {:agent :flow-diagrammer
      :prompt :flow-diagrammer}]}}}
