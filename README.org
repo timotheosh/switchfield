@@ -137,7 +137,7 @@ key such as =:agent= is reported:
 | =:harnesses= | yes      | name → ={:command string ...}= (extra keys allowed) |
 | =:agents=    | yes      | name → ={:harness kw :model string ...}= (=:skills=, =:writes=, ... below) |
 | =:prompts=   | yes      | name → ={:path string}=                             |
-| =:pipelines= | yes      | name → ={:steps [{:agent kw ...} ...]}=, at least one step |
+| =:pipelines= | yes      | name → ={:steps [{:agent kw ...} or {:command {:args [...]} ...} ...]}=, at least one step |
 | =:skills=    | no       | name → ={:path string}=                             |
 
 Validation is structural only: references between sections (an agent's
