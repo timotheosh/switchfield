@@ -33,6 +33,10 @@
   attempt with violations is rolled back and retried even when its process
   also failed, and an exhausted retry bound ends in 4, not 3."
   4)
+(def exit-review-failed
+  "A step's verdict redirected the run back to an earlier step until the
+  redirect's :max was spent."
+  5)
 
 (def cli-options
   [["-h" "--help" "Show this help"]
@@ -269,6 +273,10 @@
                                    (str " (agent exit code " code ")")
                                    (str " (" (:err last-step) ")"))
                                  trailer)}
+      :review-failed {:exit-code exit-review-failed
+                      :stderr (str "Error: " where " still failed after "
+                                   "its redirects; verdict: " (pr-str (:verdict last-step))
+                                   trailer)}
       :violations {:exit-code exit-violations
                    :stderr (str "Error: " where
                                 (if (:stopped? last-step)

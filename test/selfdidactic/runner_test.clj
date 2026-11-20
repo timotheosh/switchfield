@@ -536,3 +536,30 @@
   (testing "a malformed command is a problem before anything runs"
     (let [r (run-it! (setup!) {} [{:command ["make" "test"]}])]
       (is (= [:bad-command] (map :problem (:problems r)))))))
+
+(deftest verdict-redirect
+  (let [impl (script-agent "cat >/dev/null; echo \"$@\" >> src/log; [ -f src/n ] && touch src/ok; touch src/n")
+        gate (fn [cmd & [max]] {:command {:args ["sh" "-c" cmd]}
+                                :redirect (cond-> {:agent :impl} max (assoc :max max))})]
+    (testing "a failing command redirects to the earlier agent and replays forward"
+      (let [r (run-it! (setup!) {:impl impl} [step-impl (gate "test -f src/ok")])]
+        (is (= :success (:status r)))
+        (is (= [:impl :command :impl :command] (map :agent (attempts r))))
+        (is (= {:exit-code 1} (:verdict (second (attempts r)))))
+        (is (some #(= {:entry :redirect :from 1 :to 0 :count 1} %) (entries r)))))
+    (testing "the redirected agent is told the verdict"
+      (let [r (run-it! (setup!) {:impl impl} [step-impl (gate "test -f src/ok")])]
+        (is (str/includes? (str (:stdin (nth (attempts r) 2))) ":exit-code 1"))))
+    (testing "redirects are bounded by :max"
+      (let [r (run-it! (setup!) {:impl impl} [step-impl (gate "exit 1" 1)])]
+        (is (= :review-failed (:status r)))
+        (is (= 4 (count (attempts r))))))
+    (testing "an agent verdict from its edn output redirects"
+      (let [rev (script-agent "cat >/dev/null; printf '```edn\\n{:findings [1]}\\n```\\n'" :writes ["docs/"])
+            r   (run-it! (setup!) {:impl impl :rev rev}
+                         [step-impl {:agent :rev :prompt :p :verdict :findings
+                                     :redirect {:agent :impl :max 1}}])]
+        (is (= :review-failed (:status r)))))
+    (testing "without :redirect a failing command still fails the step"
+      (let [r (run-it! (setup!) {:impl impl} [step-impl {:command {:args ["false"]}}])]
+        (is (= :step-failed (:status r)))))))

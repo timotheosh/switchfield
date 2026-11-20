@@ -17,9 +17,11 @@
 
 (def default-max-violation-retries 2)
 
-(def step-keys #{:agent :prompt :command :timeout-ms})
+(def step-keys #{:agent :prompt :command :timeout-ms :verdict :redirect})
 
-(def agent-step-keys #{:agent :prompt})
+(def agent-step-keys #{:agent :prompt :verdict :redirect})
+
+(def default-max-redirects 2)
 
 (defn command-step?
   "A step with :command runs that argv directly instead of an agent."
@@ -93,20 +95,28 @@
 ;; -- Prompt composition -------------------------------------------------
 
 (defn render-context
-  "Calculate the prompt section for a step's context, or nil when empty. v1
-  context carries only the violations of a rejected attempt."
-  [{:keys [violations writes]}]
-  (when (seq violations)
-    (str "## Previous attempt rolled back\n\n"
-         "Your previous attempt was rolled back because it broke your "
-         "jurisdiction:\n"
-         (str/join "\n" (map #(str "- " (pr-str %)) violations))
-         "\n\nYou may write only under: " (str/join ", " (map pr-str writes))
-         ". Nothing else is allowed, including git operations and "
-         ".switchyard/. If the work needs a change outside your "
-         "jurisdiction, do not make it; end your output with an ```edn "
-         "block containing {:needs-outside-jurisdiction [{:path \"..\" "
-         ":problem \"..\" :evidence \"..\"}]}.")))
+  "Calculate the prompt section for a step's context, or nil when empty. The
+  context carries the violations of a rejected attempt and/or the verdict
+  that redirected the run back to this step."
+  [{:keys [violations writes verdict from]}]
+  (let [rolled-back
+        (when (seq violations)
+          (str "## Previous attempt rolled back\n\n"
+               "Your previous attempt was rolled back because it broke your "
+               "jurisdiction:\n"
+               (str/join "\n" (map #(str "- " (pr-str %)) violations))
+               "\n\nYou may write only under: " (str/join ", " (map pr-str writes))
+               ". Nothing else is allowed, including git operations and "
+               ".switchyard/. If the work needs a change outside your "
+               "jurisdiction, do not make it; end your output with an ```edn "
+               "block containing {:needs-outside-jurisdiction [{:path \"..\" "
+               ":problem \"..\" :evidence \"..\"}]}."))
+        redirected
+        (when (some? verdict)
+          (str "## Verdict from " (pr-str from) "\n\n"
+               "A later step rejected the work and sent the run back to you. "
+               "Address this verdict:\n\n" (pr-str verdict)))]
+    (not-empty (str/join "\n\n" (remove nil? [rolled-back redirected])))))
 
 (defn compose-prompt
   "Calculate the prompt text for one step attempt."
@@ -130,6 +140,74 @@
                  (compose-prompt {:prompt-text text :spec spec :context context}))}
       (catch clojure.lang.ExceptionInfo e
         {:problem {:problem :command :step i :message (.getMessage e)}}))))
+
+;; -- Verdicts and redirects ---------------------------------------------
+
+(defn- not-empty? [v]
+  (cond (nil? v) false
+        (or (coll? v) (string? v)) (boolean (seq v))
+        :else true))
+
+(def verdict-fns
+  "The predicates a :redirect may name. A whitelist: the timetable is data and
+  is never evaluated."
+  {'not-empty? not-empty? 'some? some?})
+
+(defn- unquote-sym [x]
+  (if (and (seq? x) (= 'quote (first x))) (second x) x))
+
+(defn redirect-verdict-fn
+  "Calculate the predicate symbol of a step's :redirect (default not-empty?)."
+  [step]
+  (unquote-sym (get-in step [:redirect :verdict] 'not-empty?)))
+
+(defn redirect-max [step]
+  (get-in step [:redirect :max] default-max-redirects))
+
+(defn step-verdict
+  "Calculate the verdict of one attempt: for a command step the failure
+  ({:exit-code n} or {:missing-artifact path}), nil on success; for an agent
+  step the `(:verdict step)` key of its parsed output. nil is no verdict. A
+  timeout or launch failure is a step failure, not a verdict."
+  [step {:keys [process exit-code missing-artifact]} parsed]
+  (if (command-step? step)
+    (cond (= :crashed process) {:exit-code exit-code}
+          missing-artifact {:missing-artifact missing-artifact})
+    (some->> (:verdict step) (get (:output parsed)))))
+
+(defn verdict-trips?
+  "A step redirects when it has a :redirect and its predicate holds."
+  [step verdict]
+  (boolean (when (:redirect step)
+             ((get verdict-fns (redirect-verdict-fn step)) verdict))))
+
+(defn redirect-target
+  "Calculate the index of the nearest step before `i` run by the redirect's
+  agent, or nil."
+  [steps i step]
+  (let [agent (get-in step [:redirect :agent])]
+    (last (filter #(= agent (:agent (nth steps %))) (range i)))))
+
+(defn redirect-problems
+  "Calculate the problems of one step's :verdict and :redirect."
+  [steps i step]
+  (let [r (:redirect step)]
+    (concat
+     (when (and (contains? step :verdict) (not (command-step? step))
+                (not (keyword? (:verdict step))))
+       [{:problem :bad-verdict-key :step i :verdict (:verdict step)}])
+     (when (contains? step :redirect)
+       (if-not (and (map? r) (every? #{:agent :verdict :max} (keys r)))
+         [{:problem :bad-redirect :step i :redirect r}]
+         (concat
+          (when-not (redirect-target steps i step)
+            [{:problem :unknown-redirect-agent :step i :agent (:agent r)}])
+          (when-not (contains? verdict-fns (redirect-verdict-fn step))
+            [{:problem :bad-verdict-fn :step i :verdict (:verdict r)}])
+          (when (and (contains? r :max) (not (pos-int? (:max r))))
+            [{:problem :bad-redirect-max :step i :max (:max r)}])
+          (when-not (or (command-step? step) (:verdict step))
+            [{:problem :redirect-without-verdict :step i}])))))))
 
 ;; -- Writes list --------------------------------------------------------
 
@@ -193,7 +271,7 @@
 (defn- command-step-problems [i step]
   (let [{:keys [args artifact] :as command} (:command step)]
     (concat
-     (for [k (keys step) :when (not (#{:command :timeout-ms} k))]
+     (for [k (keys step) :when (not (#{:command :timeout-ms :redirect} k))]
        {:problem :unsupported-step-key :step i :key k})
      (when-not (and (map? command) (vector? args) (seq args) (every? string? args))
        [{:problem :bad-command :step i :command command}])
@@ -265,6 +343,7 @@
         (concat
          (mapcat (fn [i step] (reference-problems timetable prompt-texts i step))
                  (range) steps)
+         (mapcat (fn [i step] (redirect-problems steps i step)) (range) steps)
          (agent-problems timetable steps)
          (mapcat (fn [i step] (command-problems ctx i step)) (range) steps)))))))
 

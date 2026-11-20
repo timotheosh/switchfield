@@ -246,7 +246,8 @@
                                      :after  (git/dir-trees work-dir after writes)}
                       :recreated-dirs recreated
                       :missing-artifact missing-artifact
-                      :verdict :none :violations violations
+                      :verdict (pipeline/step-verdict step (assoc run :missing-artifact missing-artifact) parsed)
+                      :violations violations
                       :restored? retryable?
                       :stopped? (boolean (some pipeline/stop-violation? violations))
                       :needs-outside-jurisdiction
@@ -257,20 +258,28 @@
 (defn- run-step!
   "Run a step, retrying it after a rollback while violations persist and the
   agent's retry bound allows. A violation outside the worktree stops the run
-  at once. Returns the last attempt with :step-status."
-  [ctx i step record]
+  at once. `context` is the first attempt's context (a verdict that redirected
+  the run here). Returns the last attempt with :step-status, :redirect when
+  the step's verdict sends the run back."
+  [ctx i step record context]
   (let [agent (get-in (:timetable ctx) [:agents (:agent step)])
         bound (cond (pipeline/command-step? step) 0 ; nothing to tell a command
                     :else (or (:max-violation-retries agent)
                               pipeline/default-max-violation-retries))]
-    (loop [n 0 context {}]
+    (loop [n 0 context context]
       (let [entry (run-attempt! ctx i step n context record)]
         (cond
           (:stopped? entry)
           (assoc entry :step-status :violations)
 
           (empty? (:violations entry))
-          (assoc entry :step-status (if (pipeline/step-continues? entry) :ok :step-failed))
+          (assoc entry :step-status
+                 (cond
+                   (and (pipeline/verdict-trips? step (:verdict entry))
+                        (or (pipeline/command-step? step) (pipeline/step-continues? entry)))
+                   :redirect
+                   (pipeline/step-continues? entry) :ok
+                   :else :step-failed))
 
           (< n bound)
           (recur (inc n) {:violations (:violations entry) :writes (:writes agent)})
@@ -289,11 +298,11 @@
 
 (defn- run-stage!
   "Run step i, announcing its start and end."
-  [ctx i step record total]
+  [ctx i step record total context]
   (let [agent (pipeline/step-label step)
         event #(hash-map :index i :total total :agent agent :phase %)]
     (announce! ctx (pipeline/stage-started-message i total agent) (event :running))
-    (let [entry (run-step! ctx i step record)
+    (let [entry (run-step! ctx i step record context)
           status (:step-status entry)]
       (announce! ctx (pipeline/stage-finished-message i total agent status)
                  (when (= :ok status) (event :done)))
@@ -323,13 +332,22 @@
                              :timetable-sha256 (sha256 (pr-str (pipeline/canonical timetable)))}
                       wt (assoc :worktree wt)
                       (:reused? wt) (assoc :resumed? true)))
-    (loop [i 0 done []]
+    (loop [i 0 done [] redirects {} context {}]
       (if (= i (count steps))
         (finish! record :success done nil wt)
-        (let [entry (run-stage! ctx i (nth steps i) record (count steps))
+        (let [step  (nth steps i)
+              entry (run-stage! ctx i step record (count steps) context)
               done  (conj done entry)]
-          (if (= :ok (:step-status entry))
-            (recur (inc i) done)
+          (case (:step-status entry)
+            :ok (recur (inc i) done redirects {})
+            :redirect
+            (let [used   (get redirects i 0)
+                  target (pipeline/redirect-target steps i step)]
+              (if (>= used (pipeline/redirect-max step))
+                (finish! record :review-failed done i wt)
+                (do (append! record {:entry :redirect :from i :to target :count (inc used)})
+                    (recur target done (assoc redirects i (inc used))
+                           {:verdict (:verdict entry) :from (pipeline/step-label step)}))))
             (finish! record (:step-status entry) done i wt)))))))
 
 (defn run-pipeline!
