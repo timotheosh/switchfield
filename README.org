@@ -167,6 +167,13 @@ agent with the violations in its prompt, up to =:max-violation-retries=
 (default 2). Optional agent keys: =:must-change=, =:timeout-ms=,
 =:expects :findings=.
 
+A step may instead be ={:command {:args ["mvn" "test"] :artifact "target/x.jar"}}=
+(optional =:timeout-ms= on the step): the runner runs the argv in the working
+directory with no agent. A non-zero exit or timeout fails the step. With an
+=:artifact= (a relative path), the step also fails when that path does not
+exist afterwards; without one, a zero exit is success. There are no =:writes=,
+so only the git tamper check applies, and the step is never retried.
+
 Success is silent apart from the worktree path. Every run appends to
 =.switchyard/<branch>/runs/<run-id>.edn= (header, each attempt, terminal
 entry). A =lock= file in the branch directory stops concurrent runs; a lock
