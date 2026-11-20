@@ -227,3 +227,29 @@
     (is (every? sut/stop-violation? [{:violation :main-checkout-modified} {:violation :git-dir-modified}]))
     (is (not-any? sut/stop-violation? [{:violation :out-of-jurisdiction} {:violation :git-tamper}
                                        {:violation :no-work} {:violation :malformed-output}]))))
+
+(deftest verdict-test
+  (testing "command verdicts are failures; agent verdicts come from output"
+    (let [cmd {:command {:args ["x"]}}]
+      (is (nil? (sut/step-verdict cmd {:process :ok} nil)))
+      (is (= {:exit-code 2} (sut/step-verdict cmd {:process :crashed :exit-code 2} nil)))
+      (is (= {:missing-artifact "a"} (sut/step-verdict cmd {:process :ok :missing-artifact "a"} nil)))
+      (is (nil? (sut/step-verdict cmd {:process :timeout} nil))))
+    (is (= [1] (sut/step-verdict {:agent :r :verdict :findings} {} {:output {:findings [1]}})))
+    (is (nil? (sut/step-verdict {:agent :r} {} {:output {:findings [1]}}))))
+  (testing "trips on the default and quoted predicates"
+    (let [s {:agent :r :redirect {:agent :w}}]
+      (is (sut/verdict-trips? s [1]))
+      (is (not (sut/verdict-trips? s [])))
+      (is (not (sut/verdict-trips? s nil)))
+      (is (sut/verdict-trips? (assoc-in s [:redirect :verdict] ''some?) :x))
+      (is (not (sut/verdict-trips? {:agent :r} [1])))))
+  (testing "redirect problems"
+    (let [w {:agent :w :prompt :p}
+          probs #(set (map :problem (sut/redirect-problems [w %] 1 %)))]
+      (is (empty? (probs {:agent :r :verdict :f :redirect {:agent :w}})))
+      (is (= #{:unknown-redirect-agent} (probs {:agent :r :verdict :f :redirect {:agent :zz}})))
+      (is (= #{:redirect-without-verdict} (probs {:agent :r :redirect {:agent :w}})))
+      (is (= #{:bad-verdict-fn} (probs {:agent :r :verdict :f :redirect {:agent :w :verdict 'eval}})))
+      (is (= #{:bad-redirect-max} (probs {:agent :r :verdict :f :redirect {:agent :w :max 0}})))
+      (is (= #{:bad-redirect} (probs {:agent :r :verdict :f :redirect {:agent :w :x 1}}))))))

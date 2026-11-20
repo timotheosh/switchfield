@@ -174,6 +174,27 @@ directory with no agent. A non-zero exit or timeout fails the step. With an
 exist afterwards; without one, a zero exit is success. There are no =:writes=,
 so only the git tamper check applies, and the step is never retried.
 
+*** Verdicts and redirects
+A step can send the run back to an earlier agent:
+
+#+begin_src clojure
+{:agent :reviewer :prompt :correctness-review
+ :verdict :findings            ; agent steps: key read from its ```edn output block
+ :redirect {:agent :test-writer
+            :verdict not-empty? ; optional; also =some?=
+            :max 2}}            ; optional, default 2
+#+end_src
+
+The verdict of an agent step is the =:verdict= key of its output; of a command
+step it is nil on success and ={:exit-code n}= or ={:missing-artifact path}=
+when it exits non-zero or lacks its =:artifact= (a timeout or launch failure
+is still a failed step, exit 3). When the =:redirect= predicate holds for the
+verdict (default =not-empty?=), the run jumps to the nearest earlier step run
+by =:redirect :agent=, gives it the verdict in its prompt, and replays every
+step from there through the reviewer. After =:max= redirects of one step the
+run ends with exit 5. Violations are handled first; a step without =:redirect=
+fails as before.
+
 Success is silent apart from the worktree path. Every run appends to
 =.switchyard/<branch>/runs/<run-id>.edn= (header, each attempt, terminal
 entry). A =lock= file in the branch directory stops concurrent runs; a lock
@@ -285,6 +306,7 @@ with =--auto= and can still write outside the repository or to ignored paths.
 |    2 | usage error                                                          |
 |    3 | a valid step ran; its agent crashed, timed out or could not start    |
 |    4 | a step kept breaking its jurisdiction after its retries              |
+|    5 | a step's verdict kept redirecting the run until =:max= was spent     |
 
 Exit =1= means no process was started: the config would not load, or the
 pipeline has problems (unknown references, bad =:writes=, a skills mismatch,
