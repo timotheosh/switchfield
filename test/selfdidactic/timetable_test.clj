@@ -44,6 +44,8 @@
     (is (not (tt/valid? (assoc full :pipelines {}))))
     (is (not (tt/valid? (assoc full :pipelines {:main {:steps []}}))))
     (is (not (tt/valid? (assoc full :pipelines {:main {:steps [{:prompt :p}]}}))))
+    (is (tt/valid? (assoc full :pipelines {:main {:steps [{:command {:args ["true"]}}]}})))
+    (is (not (tt/valid? (assoc full :pipelines {:main {:steps [{:command ["true"]}]}}))))
     (is (not (tt/valid? (assoc-in full [:agents :dev :model] :not-a-string)))))
   (testing "harness definitions stay open"
     (is (tt/valid? (assoc-in full [:harnesses :hermes :plugin] :whatever))))
