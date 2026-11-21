@@ -34,5 +34,5 @@
   {:directory [".opencode" "agents"]
    :suffix ".md"
    :contents (str "---\nmode: primary\ndescription: "
-                  (json/write-str (or description (str "Switchyard agent " agent-id)))
+                  (json/write-str (or description (str "Switchfield agent " agent-id)))
                   "\nmodel: " (json/write-str model) "\n---\n" system-prompt "\n")})

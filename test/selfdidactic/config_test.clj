@@ -6,7 +6,7 @@
            [java.nio.file.attribute FileAttribute]))
 
 (defn- temp-toml [contents]
-  (let [path (Files/createTempFile "switchyard-test-" ".toml"
+  (let [path (Files/createTempFile "switchfield-test-" ".toml"
                                    (make-array FileAttribute 0))]
     (spit (.toFile path) contents)
     (str path)))

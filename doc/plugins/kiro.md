@@ -5,7 +5,7 @@ mode (`kiro-cli chat --no-interactive`).
 
 ## Selecting it
 
-In `switchyard.toml`:
+In `switchfield.toml`:
 
 ```toml
 plugin = "kiro"
@@ -46,8 +46,8 @@ skills, attach `skill://` resources to a Kiro agent (see below).
 The model is a Kiro model id; list them with `kiro-cli chat --list-models`.
 An unknown model exits 1 and prints the available ids.
 
-For a timetable agent named `:reviewer`, Switchyard writes
-`.kiro/agents/switchyard-reviewer.json` in the run worktree, or in the
+For a timetable agent named `:reviewer`, Switchfield writes
+`.kiro/agents/switchfield-reviewer.json` in the run worktree, or in the
 checkout with `--no-worktree`. It refreshes the file before each launch,
 selects it with `--agent`, and leaves it available afterward. In the checkout,
 the retained file follows the usual Git dirty-checkout rules. The profile uses the
@@ -57,7 +57,7 @@ step's task prompt still goes on stdin. An explicit `--agent` in
 `:extra-params` selects an existing profile instead.
 
 To write the profile files ahead of a run, or to check them in, use
-`switchyard --pipeline NAME --generate-agents`. It writes the files for every
+`switchfield --pipeline NAME --generate-agents`. It writes the files for every
 agent in the pipeline into the checkout without running it. `--existing
 overwrite|skip|ask` chooses what happens to files already there (default
 `overwrite`). See the README.
@@ -84,7 +84,7 @@ work, not as a crash. Pre-approve what the agent needs:
   `--trust-tools=` trusts nothing.
 - A scoped Kiro agent for path- and command-level scoping (`allowedTools`,
   `toolsSettings.write.allowedPaths`, shell allow/deny lists).
-- `--trust-all-tools` approves everything. Switchyard checks an agent's
+- `--trust-all-tools` approves everything. Switchfield checks an agent's
   `:writes` after each step and rolls the step back on a violation; it does not
   stop the agent from writing during the step, and cannot see changes outside
   the repository or to ignored paths. Treat it like opencode's `--auto`.
@@ -121,7 +121,7 @@ from [Kiro's exit-codes reference](https://kiro.dev/docs/reference/exit-codes/).
 | 143  | `:interrupted`         | SIGTERM (plain signal death).                                    |
 
 Other non-zero codes are `:unknown`. Add your own (e.g. `137` for SIGKILL,
-which is how switchyard stops a timed-out process tree) with `:exit-codes` on
+which is how switchfield stops a timed-out process tree) with `:exit-codes` on
 the harness.
 
 ## Verified
@@ -130,4 +130,4 @@ Checked against kiro-cli 2.18.0: a stdin prompt (exit 0), an unknown model
 (exit 1), SIGTERM (exit 143), a denied unapproved write (exit 0), and writes
 succeeding under `--trust-tools=fs_read,fs_write` and `--trust-tools=read,write`.
 Not yet checked: `--model` vs an agent's own `model`, whether agent hooks fire
-under `--no-interactive`, and a full switchyard pipeline run.
+under `--no-interactive`, and a full switchfield pipeline run.

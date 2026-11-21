@@ -39,7 +39,7 @@
   (let [agent {:model "m" :description "Reviews code" :system-prompt "Review carefully."}
         profile #(-> (sut/step-command! {:plugin %} harness :reviewer agent "Task")
                      :agent-profile)]
-    (is (= {:directory [".opencode" "agents"] :suffix ".md" :id "switchyard-reviewer"
+    (is (= {:directory [".opencode" "agents"] :suffix ".md" :id "switchfield-reviewer"
             :contents (str "---\nmode: primary\ndescription: \"Reviews code\""
                            "\nmodel: \"m\"\n---\nReview carefully.\n")}
            (profile "opencode")))
@@ -56,5 +56,5 @@
 
 (deftest native-agent-names-include-the-namespace
   (let [command #(sut/step-command! {:plugin "kiro"} harness % {:model "m"} "Task")]
-    (is (= "switchyard-team_2f_reviewer" (peek (:argv (command :team/reviewer)))))
+    (is (= "switchfield-team_2f_reviewer" (peek (:argv (command :team/reviewer)))))
     (is (not= (:argv (command :team/reviewer)) (:argv (command :team_2f_reviewer))))))

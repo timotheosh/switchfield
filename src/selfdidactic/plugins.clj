@@ -38,7 +38,7 @@
          (:exit-codes harness)))
 
 (defn- profile-name [agent-id]
-  (str "switchyard-"
+  (str "switchfield-"
        (str/replace (subs (str agent-id) 1) #"[^a-z0-9-]"
                     #(format "_%x_" (.codePointAt ^String % 0)))))
 

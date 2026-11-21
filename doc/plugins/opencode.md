@@ -5,7 +5,7 @@ Runs an agent with [opencode](https://opencode.ai) in non-interactive mode
 
 ## Selecting it
 
-In `switchyard.toml`:
+In `switchfield.toml`:
 
 ```toml
 plugin = "opencode"
@@ -45,8 +45,8 @@ lists `:skills` is reported as a problem before anything runs.
 The model is `provider/model`. List what your install knows with
 `opencode models`. The provider needs credentials in `opencode auth`.
 
-For a timetable agent named `:reviewer`, Switchyard writes
-`.opencode/agents/switchyard-reviewer.md` in the run worktree, or in the
+For a timetable agent named `:reviewer`, Switchfield writes
+`.opencode/agents/switchfield-reviewer.md` in the run worktree, or in the
 checkout with `--no-worktree`. It refreshes the file before each launch,
 selects it with `--agent`, and leaves it available afterward. In the checkout,
 the retained file follows the usual Git dirty-checkout rules. The profile uses the
@@ -56,7 +56,7 @@ step's task prompt still goes on stdin. An explicit `--agent` in
 `:extra-params` selects an existing profile instead.
 
 To write the profile files ahead of a run, or to check them in, use
-`switchyard --pipeline NAME --generate-agents`. It writes the files for every
+`switchfield --pipeline NAME --generate-agents`. It writes the files for every
 agent in the pipeline into the checkout without running it. `--existing
 overwrite|skip|ask` chooses what happens to files already there (default
 `overwrite`). See the README.
@@ -73,7 +73,7 @@ hits the operating system's argument-length limit and a prompt that starts
 with `-` can't be mistaken for a flag.
 
 `--auto` makes opencode approve every permission request that isn't explicitly
-denied. Switchyard checks an agent's `:writes` after each step and rolls the
+denied. Switchfield checks an agent's `:writes` after each step and rolls the
 step back on a violation; it does not stop the agent from writing during the
 step, and it cannot see changes outside the repository or to ignored paths.
 Treat `--auto` accordingly.
@@ -86,7 +86,7 @@ Exit codes name a crash in the run record and failure message.
 |------|----------------|--------------------------------------------------------------|
 | 1    | `:error`       | Every error opencode reports itself: a bad model, missing credentials, a server error, a missing message, a bad flag. They are not distinguishable. |
 | 130  | `:interrupted` | SIGINT or SIGTERM: opencode 2.x handles both and exits 130. |
-| 137  | `:killed`      | SIGKILL (also how switchyard stops a timed-out process tree). |
+| 137  | `:killed`      | SIGKILL (also how switchfield stops a timed-out process tree). |
 
 Other non-zero codes are `:unknown`. Add your own with `:exit-codes` on the
 harness.

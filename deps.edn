@@ -9,7 +9,7 @@
  :aliases
  {:repl {:main-opts ["-e" "(do (require 'selfdidactic.cli) (in-ns 'selfdidactic.cli) nil)"
                       "-r"]}
-  :run-m {:main-opts ["-m" "selfdidactic.switchyard"]}
+  :run-m {:main-opts ["-m" "selfdidactic.switchfield"]}
   :build {:extra-paths ["src"]
           :deps {io.github.clojure/tools.build
                  {:mvn/version "0.10.14"}}

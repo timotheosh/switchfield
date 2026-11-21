@@ -5,7 +5,7 @@
             [toml-clj.core :as toml])
   (:import [java.io File]))
 
-(def default-resource "switchyard.toml")
+(def default-resource "switchfield.toml")
 
 (def required-keys
   "Each required config key, and how it can be supplied."
@@ -67,7 +67,7 @@
 (defn- read-via-yogthos!
   "Load an EDN map through yogthos/config. This is the only use of config.core."
   [config]
-  (let [file (File/createTempFile "switchyard-config-" ".edn")]
+  (let [file (File/createTempFile "switchfield-config-" ".edn")]
     (try
       (spit file (show-str config))
       (yogthos/read-config-file (str file))

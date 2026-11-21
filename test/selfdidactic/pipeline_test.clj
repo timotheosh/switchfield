@@ -23,7 +23,7 @@
   (is (not= (sut/encode-branch "feat/a-b") (sut/encode-branch "feat-a/b")))
   (is (not= (sut/encode-branch "a%2Fb") (sut/encode-branch "a/b")))
   (is (= "feat%2Fx" (sut/encode-branch "feat/x")))
-  (is (= "/r/.switchyard/feat%2Fx" (sut/timetable-dir "/r" "feat/x"))))
+  (is (= "/r/.switchfield/feat%2Fx" (sut/timetable-dir "/r" "feat/x"))))
 
 (deftest compose-prompt-test
   (is (= "PROMPT\n\n## Specification (s.md)\n\nSPEC"
@@ -51,9 +51,9 @@
 
 (deftest jurisdiction-violations-test
   (is (= [{:violation :out-of-jurisdiction :path "deps.edn"}
-          {:violation :out-of-jurisdiction :path ".switchyard/x/lock"}]
+          {:violation :out-of-jurisdiction :path ".switchfield/x/lock"}]
          (sut/jurisdiction-violations ["src/" "test/"]
-                                      ["src/a.clj" "deps.edn" "test/t.clj" ".switchyard/x/lock"])))
+                                      ["src/a.clj" "deps.edn" "test/t.clj" ".switchfield/x/lock"])))
   (testing "a prefix is a directory, not a name prefix"
     (is (= 1 (count (sut/jurisdiction-violations ["src/"] ["src2/a.clj"]))))))
 
@@ -112,7 +112,7 @@
   (testing "bad and overlapping :writes"
     (is (contains? (problem-kinds (assoc-in ctx [:timetable :agents :tw :writes] ["test"]))
                    :bad-writes-prefix))
-    (is (contains? (problem-kinds (assoc-in ctx [:timetable :agents :tw :writes] [".switchyard/"]))
+    (is (contains? (problem-kinds (assoc-in ctx [:timetable :agents :tw :writes] [".switchfield/"]))
                    :bad-writes-prefix))
     (is (contains? (problem-kinds (assoc-in ctx [:timetable :agents :tw :writes] ["src/x/"]))
                    :overlapping-writes)))
@@ -187,7 +187,7 @@
   (is (every? sut/valid-run-id? ["r1" "20261013T170516Z-ab12cd" "a.b_c-d"]))
   (is (not-any? sut/valid-run-id? [nil "" "a/b" "../x" ".hidden" "-x" "a b" "r1\n"]))
   (is (= "feat%2Fx-r1" (sut/worktree-name "feat%2Fx" "r1")))
-  (is (= "switchyard/feat%2Fx/r1" (sut/worktree-branch "feat%2Fx" "r1"))))
+  (is (= "switchfield/feat%2Fx/r1" (sut/worktree-branch "feat%2Fx" "r1"))))
 
 (deftest worktree-problems-test
   (let [base {:worktree? true :branch "main" :run-id "r1" :worktree-facts {}}
@@ -208,18 +208,18 @@
       (is (= #{[:worktree-conflict :branch-without-worktree]}
              (kinds (assoc base :worktree-facts {:branch-exists? true}))))
       (is (= #{[:worktree-conflict :ref-conflict]}
-             (kinds (assoc base :worktree-facts {:ref-conflicts ["switchyard"]})))))
+             (kinds (assoc base :worktree-facts {:ref-conflicts ["switchfield"]})))))
     (testing "a branch named like the container directory, and a bad run id"
       (is (contains? (kinds (assoc base :branch "worktrees")) [:reserved-branch-name nil]))
       (is (contains? (kinds (assoc base :run-id "a/b")) [:invalid-run-id nil])))))
 
 (deftest watcher-violations-test
   (testing "runner state is out of jurisdiction; the rest stops the run"
-    (is (= [{:violation :out-of-jurisdiction :path ".switchyard/main/runs/x"}
+    (is (= [{:violation :out-of-jurisdiction :path ".switchfield/main/runs/x"}
             {:violation :main-checkout-modified :path "notes.txt"}
             {:violation :git-dir-modified :path ".git/hooks/pre-commit"}]
            (sut/watcher-violations
-            {:state-changed [".switchyard/main/runs/x"] :main-changed ["notes.txt"]
+            {:state-changed [".switchfield/main/runs/x"] :main-changed ["notes.txt"]
              :git-dir-before {"config" "h"} :git-dir-after {"config" "h" "hooks/pre-commit" "n"}}))))
   (testing "nothing changed, nothing reported"
     (is (empty? (sut/watcher-violations {:git-dir-before {"config" "h"} :git-dir-after {"config" "h"}}))))

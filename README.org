@@ -1,9 +1,9 @@
-* selfdidactic/switchyard
+* selfdidactic/switchfield
 :PROPERTIES:
-:CUSTOM_ID: selfdidacticswitchyard
+:CUSTOM_ID: selfdidacticswitchfield
 :END:
 
-Switchyard is a non-interactive Clojure CLI that loads a specification
+Switchfield is a non-interactive Clojure CLI that loads a specification
 document for processing. Specifications may use Markdown or Org format.
 
 ** Installation
@@ -11,7 +11,7 @@ document for processing. Specifications may use Markdown or Org format.
 :CUSTOM_ID: installation
 :END:
 Clone or download the project from
-https://github.com/selfdidactic/switchyard and install Clojure CLI.
+https://github.com/selfdidactic/switchfield and install Clojure CLI.
 
 ** Usage
 :PROPERTIES:
@@ -30,7 +30,7 @@ act on the specification; use =--validate= to check that it can be read.
 Specification files may be =.md=, =.markdown=, or =.org=; extensions are
 matched case-insensitively.
 
-Running without arguments uses the bundled =switchyard.toml=:
+Running without arguments uses the bundled =switchfield.toml=:
 
 #+begin_example
 $ clojure -M:run-m
@@ -49,9 +49,9 @@ $ clojure -T:build ci
 Then run the same CLI from the generated jar:
 
 #+begin_example
-$ java -jar target/net.clojars.selfdidactic/switchyard-0.1.0-SNAPSHOT.jar --spec path/to/spec.org
-$ java -jar target/net.clojars.selfdidactic/switchyard-0.1.0-SNAPSHOT.jar --version
-switchyard 0.1.0-SNAPSHOT
+$ java -jar target/net.clojars.selfdidactic/switchfield-0.1.0-SNAPSHOT.jar --spec path/to/spec.org
+$ java -jar target/net.clojars.selfdidactic/switchfield-0.1.0-SNAPSHOT.jar --version
+switchfield 0.1.0-SNAPSHOT
 #+end_example
 
 ** Options
@@ -78,7 +78,7 @@ Help takes precedence over every other option (even with an unreadable
 =--config=). Version takes precedence over everything except help.
 
 - =-c, --config PATH= reads the TOML file at PATH. When omitted, the
-  =switchyard.toml= resource on the classpath is used (bundled in
+  =switchfield.toml= resource on the classpath is used (bundled in
   =resources/= and in the uberjar); a missing default resource is an empty
   configuration, but a missing explicit =-c= file is an error.
 - =--validate= reads the effective specification path (from =--spec= or the
@@ -90,14 +90,14 @@ Help takes precedence over every other option (even with an unreadable
 :PROPERTIES:
 :CUSTOM_ID: timetable
 :END:
-A timetable describes what Switchyard runs: harnesses, agents, skills,
+A timetable describes what Switchfield runs: harnesses, agents, skills,
 prompts, and pipelines. It is written as EDN maps in any number of files.
 The files together form *one logical timetable*; file names and boundaries
 carry no meaning. The example files in =resources/timetable= (an opencode
 pipeline with its prompt files) split it by root key, but a single
-=switchyard.edn= works equally well, as does any grouping (=common.edn=,
+=switchfield.edn= works equally well, as does any grouping (=common.edn=,
 =clojure.edn=, =development.edn=). To try the example, copy that directory to
-=.switchyard/<branch>/=: prompt and skill paths are relative to it. The
+=.switchfield/<branch>/=: prompt and skill paths are relative to it. The
 harness plugins are documented in =doc/plugins/opencode.md=,
 =doc/plugins/hermes.md= and =doc/plugins/kiro.md=.
 
@@ -152,14 +152,14 @@ data lists the =:problems=.
 $ clojure -M:run-m --spec spec.md --pipeline development
 #+end_example
 
-The timetable is read from =<project root>/.switchyard/<branch>/= (the branch
+The timetable is read from =<project root>/.switchfield/<branch>/= (the branch
 name has =%= and =/= percent-encoded, so =feat/x= is =feat%2Fx=). Prompt and
 skill paths are relative to that directory. Steps run in order; each agent
 runs in the project root with its prompt file followed by the specification.
-The agent harness is chosen by the =plugin= key of =switchyard.toml=.
+The agent harness is chosen by the =plugin= key of =switchfield.toml=.
 
 Each agent declares =:writes=, a vector of directory prefixes (=["src/"]=).
-Anything not claimed by an agent is writable by none, and =.switchyard/= is
+Anything not claimed by an agent is writable by none, and =.switchfield/= is
 owned by the runner. Before and after each step the runner snapshots the
 working tree by content; a change outside the agent's =:writes=, or any
 change to HEAD, refs or the index, rolls back the whole step and re-runs the
@@ -176,7 +176,7 @@ so only the git tamper check applies, and the step is never retried.
 
 An =:artifact= is a file path /or/ a stream to capture, never both: =:stdout=,
 =:stderr= or =:both= (interleaved as =2>&1=) saves the
-full output to =.switchyard/<branch>/runs/<run-id>/step-<n>.log= (path in the
+full output to =.switchfield/<branch>/runs/<run-id>/step-<n>.log= (path in the
 attempt's =:log=). When the step fails, its verdict also carries
 =:output=, the clipped text (={:exit-code n :output "..."}=). =:capture-max= is a character count: a
 negative number keeps the last n characters (default =-8000=), a positive one
@@ -204,7 +204,7 @@ run ends with exit 5. Violations are handled first; a step without =:redirect=
 fails as before.
 
 Success is silent apart from the worktree path. Every run appends to
-=.switchyard/<branch>/runs/<run-id>.edn= (header, each attempt, terminal
+=.switchfield/<branch>/runs/<run-id>.edn= (header, each attempt, terminal
 entry). A =lock= file in the branch directory stops concurrent runs; a lock
 whose process is dead is reported as stale and cleared only by
 =--force-unlock=.
@@ -267,12 +267,12 @@ Note that a normal run still refreshes its own profile before each launch.
 By default each run happens in its own git worktree, so agents never touch
 your checkout:
 
-- The worktree is =<repo root>/.switchyard/worktrees/<branch>-<run-id>= (the
-  branch is encoded as above), on a new branch =switchyard/<branch>/<run-id>=
+- The worktree is =<repo root>/.switchfield/worktrees/<branch>-<run-id>= (the
+  branch is encoded as above), on a new branch =switchfield/<branch>/<run-id>=
   started from =HEAD=. The run id is generated, or given with =--run-id=.
 - Agents run with the worktree as their directory; every snapshot, check and
   rollback above happens there. The timetable, lock and run record stay in
-  the main checkout's =.switchyard/<branch>/= and are read and written by the
+  the main checkout's =.switchfield/<branch>/= and are read and written by the
   orchestrator only.
 - Nothing is committed or removed. The run prints =worktree: <path>= (on
   failure, with the failure message); review, commit and merge from there, and
@@ -285,12 +285,12 @@ your checkout:
   uncommitted changes (nor untracked files). A checkout with uncommitted
   changes to tracked files is therefore a problem, listing them; =--allow-dirty=
   skips that check but does not make agents see them. Edits under
-  =.switchyard/= do not count.
-- Turn it off with =--no-worktree= or =worktree = false= in =switchyard.toml=
+  =.switchfield/= do not count.
+- Turn it off with =--no-worktree= or =worktree = false= in =switchfield.toml=
   (the flag wins); agents then run in the project root.
 
-=.switchyard/= is meant to be committed (it holds the timetable and prompts), so
-switchyard keeps a =.switchyard/.gitignore= for the volatile parts:
+=.switchfield/= is meant to be committed (it holds the timetable and prompts), so
+switchfield keeps a =.switchfield/.gitignore= for the volatile parts:
 =worktrees/=, =*/lock= and =*/db/=. =db/= is reserved for the orchestrator's own
 state: it is never snapshotted or rolled back.
 
@@ -299,7 +299,7 @@ worktree, taken before and after every attempt:
 
 | Watched                                                  | A change is                                   |
 |----------------------------------------------------------+-----------------------------------------------|
-| the runner's state, =.switchyard/<branch>/= (not =db/=)   | out of jurisdiction: rolled back, step retried |
+| the runner's state, =.switchfield/<branch>/= (not =db/=)   | out of jurisdiction: rolled back, step retried |
 | the rest of the main checkout                            | stops the run (exit 4); never rolled back     |
 | the shared git directory: =config=, =hooks/=, =info/=      | stops the run (exit 4); never rolled back     |
 
@@ -328,7 +328,7 @@ run ends with =4=, even when the last attempt also crashed. A step ends with
 =3= only when an attempt has no violations and its process did not succeed;
 a later clean attempt can still turn an earlier violation into success. The
 agent's own exit code is printed in the failure message and kept in the run
-record; it is never switchyard's exit code.
+record; it is never switchfield's exit code.
 
 *** Harness exit codes
 A crashed step is named by its harness's exit codes. Each plugin supplies
@@ -343,7 +343,7 @@ harness may extend or override them in the timetable:
 #+end_example
 
 The reason appears in the run record and the failure message; an unlisted
-code is =:unknown=. These describe the /agent's/ exit code; switchyard's own
+code is =:unknown=. These describe the /agent's/ exit code; switchfield's own
 exit codes are in the table above.
 
 ** Configuration
@@ -355,7 +355,7 @@ map, and reads it through [[https://github.com/yogthos/config][yogthos/config]].
 used; environment variables and system properties do not affect values.
 Command-line options override the file: =--spec= replaces =spec=.
 
-=resources/switchyard.toml=:
+=resources/switchfield.toml=:
 
 #+begin_example
 spec = "resources/sample-project/specification.md"
@@ -399,7 +399,7 @@ matching row wins:
 :CUSTOM_ID: development
 :END:
 
-Start a REPL in =selfdidactic.cli= (=selfdidactic.switchyard=
+Start a REPL in =selfdidactic.cli= (=selfdidactic.switchfield=
 holds =-main=):
 
 #+begin_example

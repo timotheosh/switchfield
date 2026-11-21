@@ -67,12 +67,12 @@
 (defn timetable-dir
   "Calculate the per-branch directory that holds the timetable and run state."
   [root branch]
-  (str root "/.switchyard/" (encode-branch branch)))
+  (str root "/.switchfield/" (encode-branch branch)))
 
 ;; -- Run worktrees ------------------------------------------------------
 
 (def worktrees-dir
-  "The directory under .switchyard/ that holds run worktrees; a branch whose
+  "The directory under .switchfield/ that holds run worktrees; a branch whose
   encoded name equals it would collide."
   "worktrees")
 
@@ -89,7 +89,7 @@
 (defn worktree-branch
   "Calculate the git branch a run's worktree is created on."
   [encoded-branch run-id]
-  (str "switchyard/" encoded-branch "/" run-id))
+  (str "switchfield/" encoded-branch "/" run-id))
 
 (defn worktree-problems
   "Calculate the problems that stop a worktree run from being set up. ctx:
@@ -130,7 +130,7 @@
                (str/join "\n" (map #(str "- " (pr-str %)) violations))
                "\n\nYou may write only under: " (str/join ", " (map pr-str writes))
                ". Nothing else is allowed, including git operations and "
-               ".switchyard/. If the work needs a change outside your "
+               ".switchfield/. If the work needs a change outside your "
                "jurisdiction, do not make it; end your output with an ```edn "
                "block containing {:needs-outside-jurisdiction [{:path \"..\" "
                ":problem \"..\" :evidence \"..\"}]}."))
@@ -258,7 +258,7 @@
   (when (or (not (str/ends-with? prefix "/"))
             (str/starts-with? prefix "/")
             (str/includes? prefix "..")
-            (str/starts-with? prefix ".switchyard"))
+            (str/starts-with? prefix ".switchfield"))
     {:problem :bad-writes-prefix :agent agent-name :prefix prefix}))
 
 (defn- overlaps? [a b]

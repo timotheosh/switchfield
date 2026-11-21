@@ -9,7 +9,7 @@ one-shot mode (`-z/--oneshot`).
 
 ## Selecting it
 
-In `switchyard.toml`:
+In `switchfield.toml`:
 
 ```toml
 plugin = "hermes"

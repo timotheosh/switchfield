@@ -76,9 +76,9 @@
   ([argv dir {:keys [stdin] :as options}]
    (when (nil? dir)
      (throw (ex-info "start requires a working directory" {:dir dir})))
-   (let [out (File/createTempFile "switchyard-out-" ".txt")
-         err (File/createTempFile "switchyard-err-" ".txt")
-         in  (when stdin (doto (File/createTempFile "switchyard-in-" ".txt")
+   (let [out (File/createTempFile "switchfield-out-" ".txt")
+         err (File/createTempFile "switchfield-err-" ".txt")
+         in  (when stdin (doto (File/createTempFile "switchfield-in-" ".txt")
                            (spit stdin)))]
      (try
        (run-in-files! argv dir options in out err)
