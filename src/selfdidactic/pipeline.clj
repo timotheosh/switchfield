@@ -65,9 +65,16 @@
   (-> branch (str/replace "%" "%25") (str/replace "/" "%2F")))
 
 (defn timetable-dir
-  "Calculate the per-branch directory that holds the timetable and run state."
+  "Calculate the per-branch directory that holds run state (lock, runs/, db/)
+  and the branch's timetable overrides."
   [root branch]
   (str root "/.switchfield/" (encode-branch branch)))
+
+(defn timetable-dirs
+  "Calculate the directories a branch's timetable is read from, lowest
+  precedence first: the repo-wide .switchfield/, then the branch's own."
+  [root branch]
+  [(str root "/.switchfield") (timetable-dir root branch)])
 
 ;; -- Run worktrees ------------------------------------------------------
 

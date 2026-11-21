@@ -97,12 +97,22 @@ carry no meaning. The example files in =resources/timetable= (an opencode
 pipeline with its prompt files) split it by root key, but a single
 =switchfield.edn= works equally well, as does any grouping (=common.edn=,
 =clojure.edn=, =development.edn=). To try the example, copy that directory to
-=.switchfield/<branch>/=: prompt and skill paths are relative to it. The
+=.switchfield/= (shared by every branch); prompt and skill paths are relative to
+the directory they are found in. The
 harness plugins are documented in =doc/plugins/opencode.md=,
 =doc/plugins/hermes.md= and =doc/plugins/kiro.md=.
 
 Load a directory with =selfdidactic.timetable/load-dir=: it reads every
 =*.edn= file in sorted name order, merges them, and validates the result.
+
+*** Repo-wide timetable and per-branch overrides
+A pipeline is defined once for the whole repository: put the fragments in
+=.switchfield/=. A branch may add =*.edn= fragments to =.switchfield/<branch>/=;
+they are merged on top of the shared ones (same rules as below), so a branch
+overrides only the keys it names. Prompt and skill paths are looked up in the
+branch directory first, then in =.switchfield/=. =selfdidactic.timetable/load-dirs=
+does the layered load. The branch directory also holds that branch's run state
+(=lock=, =runs/=, =db/=), and is created on the first run if it does not exist.
 
 *** Merging
 Fragments are merged recursively. When both values are maps they merge;
@@ -152,9 +162,10 @@ data lists the =:problems=.
 $ clojure -M:run-m --spec spec.md --pipeline development
 #+end_example
 
-The timetable is read from =<project root>/.switchfield/<branch>/= (the branch
-name has =%= and =/= percent-encoded, so =feat/x= is =feat%2Fx=). Prompt and
-skill paths are relative to that directory. Steps run in order; each agent
+The timetable is read from =<project root>/.switchfield/=, then overridden by
+=<project root>/.switchfield/<branch>/= (the branch name has =%= and =/=
+percent-encoded, so =feat/x= is =feat%2Fx=). Prompt and skill paths are
+relative to the directory that holds them, the branch's winning. Steps run in order; each agent
 runs in the project root with its prompt file followed by the specification.
 The agent harness is chosen by the =plugin= key of =switchfield.toml=.
 
@@ -272,8 +283,8 @@ your checkout:
   started from =HEAD=. The run id is generated, or given with =--run-id=.
 - Agents run with the worktree as their directory; every snapshot, check and
   rollback above happens there. The timetable, lock and run record stay in
-  the main checkout's =.switchfield/<branch>/= and are read and written by the
-  orchestrator only.
+  the main checkout's =.switchfield/= (run state in =.switchfield/<branch>/=) and
+  are read and written by the orchestrator only.
 - Nothing is committed or removed. The run prints =worktree: <path>= (on
   failure, with the failure message); review, commit and merge from there, and
   clean up with =git worktree remove <path>=.

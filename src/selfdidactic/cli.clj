@@ -299,12 +299,14 @@
         branch (git/branch root)]
     (if-not branch
       {:status :problems :problems [{:problem :detached-head}]}
-      (let [dir (pipeline/timetable-dir root branch)]
-        (when-not (.isDirectory (io/file dir))
-          (throw (ex-info (str "no timetable directory: " dir) {})))
+      (let [dir  (pipeline/timetable-dir root branch)
+            dirs (pipeline/timetable-dirs root branch)]
+        (when-not (some #(.isDirectory (io/file %)) dirs)
+          (throw (ex-info (str "no timetable directory: " (first dirs)) {})))
         (runner/run-pipeline!
          {:config config :pipeline-name pipeline-name
-          :timetable (timetable/load-dir dir)
+          :timetable (timetable/load-dirs dirs)
+          :timetable-dirs dirs
           :spec (load-specification! (:spec config))
           :root root :branch branch :dir dir
           :force-unlock? force-unlock?
@@ -333,10 +335,10 @@
   [{:keys [config pipeline-name existing]}]
   (try
     (let [root (git/toplevel ".")
-          dir  (pipeline/timetable-dir root (git/branch root))
+          dirs (pipeline/timetable-dirs root (git/branch root))
           paths (runner/generate-agent-profiles!
                  {:config config :pipeline-name pipeline-name
-                  :timetable (timetable/load-dir dir) :root root
+                  :timetable (timetable/load-dirs dirs) :root root
                   :overwrite? (case existing
                                 "skip" (constantly false)
                                 "ask" ask-overwrite?

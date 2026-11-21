@@ -189,7 +189,26 @@
                  {:config {:plugin "opencode"} :timetable timetable
                   :pipeline-name :development :branch "main"
                   :spec {:path "spec.md" :contents "SPEC"}
-                  :prompt-texts (sut/read-prompts dir timetable :development)})))))
+                  :prompt-texts (sut/read-prompts [dir] timetable :development)})))))
+
+(deftest read-prompts-layers-directories
+  (let [tmp (.toFile (java.nio.file.Files/createTempDirectory "rp" (make-array java.nio.file.attribute.FileAttribute 0)))
+        shared (io/file tmp "shared") branch (io/file tmp "branch")
+        tt {:prompts {:a {:path "a.md"} :b {:path "b.md"} :c {:path "c.md"}}
+            :pipelines {:p {:steps [{:agent :x :prompt :a} {:agent :x :prompt :b} {:agent :x :prompt :c}]}}}]
+    (.mkdirs shared) (.mkdirs branch)
+    (spit (io/file shared "a.md") "shared-a")
+    (spit (io/file shared "b.md") "shared-b")
+    (spit (io/file branch "b.md") "branch-b")
+    (let [r (sut/read-prompts [shared branch] tt :p)]
+      (is (= {:text "shared-a"} (r :a)) "shared prompt is used when the branch has none")
+      (is (= {:text "branch-b"} (r :b)) "branch prompt overrides the shared one")
+      (is (:error (r :c)) "a prompt in neither directory is an error"))))
+
+(deftest acquire-lock-creates-a-missing-state-directory
+  (let [dir (io/file (.toFile (java.nio.file.Files/createTempDirectory "lk" (make-array java.nio.file.attribute.FileAttribute 0))) "feat%2Fx")]
+    (is (:lock (sut/acquire-lock! (str dir) false)))
+    (is (.exists (io/file dir "lock")))))
 
 (deftest exit-precedence
   (testing "violations win over a failing process: exhausted retries end in :violations"

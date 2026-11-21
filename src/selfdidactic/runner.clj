@@ -49,6 +49,7 @@
         host (hostname)
         data {:pid (.pid (java.lang.ProcessHandle/current)) :host host
               :since (str (Instant/now))}]
+    (.mkdirs (io/file dir))                 ; a branch may have no overrides
     (when force? (.delete f))
     (try
       (Files/writeString (.toPath f) (pr-str data)
@@ -85,12 +86,14 @@
 
 (defn read-prompts
   "Read every prompt the pipeline uses: {prompt-name {:text s} | {:error s}}.
-  Paths are relative to the timetable directory."
-  [dir timetable pipeline-name]
+  Paths are relative to the timetable directories (lowest precedence first);
+  the last directory that has the file wins."
+  [dirs timetable pipeline-name]
   (into {}
         (for [p (distinct (keep :prompt (get-in timetable [:pipelines pipeline-name :steps])))
               :let [path (get-in timetable [:prompts p :path])] :when path
-              :let [f (io/file dir path)]]
+              :let [f (or (->> dirs (map #(io/file % path)) (filter #(.isFile %)) last)
+                          (io/file (last dirs) path))]]
           [p (if (.isFile f)
                {:text (slurp f)}
                {:error (str "not a readable file: " f)})])))
@@ -367,7 +370,8 @@
 (defn run-pipeline!
   "Run the named pipeline sequentially. ctx: :config :timetable
   :pipeline-name :spec {:path :contents} :root (repo top level) :branch
-  :dir (the branch's timetable directory) :force-unlock?, and for worktree
+  :dir (the branch's state directory), :timetable-dirs (where prompt files
+  are read from, lowest precedence first; defaults to [dir]) :force-unlock?, and for worktree
   runs :worktree? :run-id (optional; generated when absent) :allow-dirty?.
   Returns {:status :success|:step-failed|:violations ...} or
   {:status :problems :problems [...]} before anything has run."
@@ -379,7 +383,7 @@
         ctx      (assoc ctx
                         :writes writes :run-id run-id :eb eb
                         :writes-fs (if root (inspect-writes root writes) {})
-                        :prompt-texts (if dir (read-prompts dir timetable pipeline-name) {})
+                        :prompt-texts (if dir (read-prompts (or (:timetable-dirs ctx) [dir]) timetable pipeline-name) {})
                         :dirty-paths (when probe? (git/dirty-paths root))
                         :worktree-facts (when probe? (worktree-facts root eb run-id)))
         problems (pipeline/pipeline-problems ctx)]
