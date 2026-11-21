@@ -23,7 +23,8 @@
   (is (not= (sut/encode-branch "feat/a-b") (sut/encode-branch "feat-a/b")))
   (is (not= (sut/encode-branch "a%2Fb") (sut/encode-branch "a/b")))
   (is (= "feat%2Fx" (sut/encode-branch "feat/x")))
-  (is (= "/r/.switchfield/feat%2Fx" (sut/timetable-dir "/r" "feat/x"))))
+  (is (= "/r/.switchfield/feat%2Fx" (sut/timetable-dir "/r" "feat/x")))
+  (is (= ["/r/.switchfield" "/r/.switchfield/feat%2Fx"] (sut/timetable-dirs "/r" "feat/x"))))
 
 (deftest compose-prompt-test
   (is (= "PROMPT\n\n## Specification (s.md)\n\nSPEC"

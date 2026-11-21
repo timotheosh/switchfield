@@ -1,5 +1,6 @@
 (ns selfdidactic.timetable-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
             [selfdidactic.timetable :as tt]))
 
 (def full
@@ -80,6 +81,26 @@
 
 (deftest load-dir-test
   (is (tt/valid? (tt/load-dir "resources/timetable"))))
+
+(deftest load-dirs-test
+  (let [tmp    (.toFile (java.nio.file.Files/createTempDirectory "tt" (make-array java.nio.file.attribute.FileAttribute 0)))
+        shared (io/file tmp "shared")
+        branch (io/file tmp "branch")]
+    (.mkdirs shared)
+    (.mkdirs branch)
+    (spit (io/file shared "all.edn") (pr-str full))
+    (testing "a missing or empty branch directory inherits the shared timetable"
+      (is (= full (tt/load-dirs [shared (io/file tmp "nope")])))
+      (is (= full (tt/load-dirs [shared branch]))))
+    (testing "the branch directory overrides the shared one, key by key"
+      (spit (io/file branch "o.edn") (pr-str {:agents {:dev {:model "other"}}}))
+      (is (= "other" (get-in (tt/load-dirs [shared branch]) [:agents :dev :model])))
+      (is (= :hermes (get-in (tt/load-dirs [shared branch]) [:agents :dev :harness]))))
+    (testing "a branch directory nested in the shared one is not read as a fragment"
+      (let [nested (io/file shared "main")]
+        (.mkdirs nested)
+        (spit (io/file nested "o.edn") (pr-str {:agents {:dev {:model "nested"}}}))
+        (is (= "m" (get-in (tt/load-dirs [shared]) [:agents :dev :model])))))))
 
 (deftest harness-exit-codes-test
   (testing ":exit-codes names a harness's exit codes"

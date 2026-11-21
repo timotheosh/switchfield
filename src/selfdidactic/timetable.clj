@@ -76,10 +76,17 @@
        (filter #(and (.isFile %) (.endsWith (.getName %) ".edn")))
        (sort-by #(.getName %))))
 
-(defn load-dir
-  "Load every *.edn in dir (sorted by name), merge, and validate."
-  [dir]
-  (->> (edn-files dir)
+(defn load-dirs
+  "Load every *.edn in each dir (sorted by name within a dir; a missing dir
+  holds none), merge with later dirs taking precedence, and validate."
+  [dirs]
+  (->> dirs
+       (mapcat edn-files)
        (map load-fragment)
        (apply merge-timetables)
        validate))
+
+(defn load-dir
+  "Load every *.edn in dir (sorted by name), merge, and validate."
+  [dir]
+  (load-dirs [dir]))
