@@ -42,7 +42,7 @@
           (pos? n) (subs s 0 k)
           :else    (subs s (- c k)))))
 
-(def agent-step-keys #{:agent :prompt :verdict :redirect})
+(def agent-step-keys #{:agent :prompt :verdict :redirect :concurrent})
 
 (def default-max-redirects 2)
 
@@ -56,6 +56,34 @@
   [step]
   (or (:agent step) :command))
 
+;; -- Concurrent steps ---------------------------------------------------
+
+(defn step-groups
+  "Calculate the groups of step indexes that run together: a maximal run of
+  adjacent :concurrent steps is one group, every other step is its own."
+  [steps]
+  (->> (map-indexed vector steps)
+       (partition-by (fn [[i step]] (if (:concurrent step) :concurrent i)))
+       (mapv #(mapv first %))))
+
+(defn group-index
+  "Calculate the index of the group that holds step i."
+  [groups i]
+  (first (keep-indexed (fn [g indexes] (when (some #{i} indexes) g)) groups)))
+
+(defn- concurrent-problems
+  "Calculate the problems of a :concurrent step. Concurrent agents share one
+  working tree, so a change cannot be attributed to one of them: none may
+  write. A redirect would have to replay the whole group."
+  [timetable i step]
+  (when (:concurrent step)
+    (let [writes (get-in timetable [:agents (:agent step) :writes])]
+      (concat
+       (when (seq writes)
+         [{:problem :concurrent-writes :step i :agent (:agent step) :writes writes}])
+       (when (contains? step :redirect)
+         [{:problem :concurrent-redirect :step i}])))))
+
 ;; -- Branch directory ---------------------------------------------------
 
 (defn encode-branch
@@ -65,7 +93,7 @@
   (-> branch (str/replace "%" "%25") (str/replace "/" "%2F")))
 
 (defn timetable-dir
-  "Calculate the per-branch directory that holds run state (lock, runs/, db/)
+  "Calculate the per-branch directory that holds run state (lock, runs/, logs/, db/)
   and the branch's timetable overrides."
   [root branch]
   (str root "/.switchfield/" (encode-branch branch)))
@@ -382,6 +410,7 @@
          (mapcat (fn [i step] (reference-problems timetable prompt-texts i step))
                  (range) steps)
          (mapcat (fn [i step] (redirect-problems steps i step)) (range) steps)
+         (mapcat (fn [i step] (concurrent-problems timetable i step)) (range) steps)
          (agent-problems timetable steps)
          (mapcat (fn [i step] (command-problems ctx i step)) (range) steps)))))))
 

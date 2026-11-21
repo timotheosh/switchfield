@@ -102,8 +102,8 @@
 
 (def ^:private state-ignore-lines
   "The volatile parts of .switchfield/ (it is otherwise tracked, so the
-  timetable can be committed): run worktrees, locks and the reserved db/."
-  ["worktrees/" "*/lock" "*/db/"])
+  timetable can be committed): run worktrees, locks, the reserved db/ and logs/."
+  ["worktrees/" "*/lock" "*/db/" "*/logs/"])
 
 (defn- worktree-path [root eb run-id]
   (str root "/.switchfield/" pipeline/worktrees-dir "/" (pipeline/worktree-name eb run-id)))
@@ -187,54 +187,74 @@
          (write-agent-profile! root profile))))
 
 (defn- write-step-log!
-  "Save a step's full captured output under the run's directory; its path."
+  "Save a step's full captured output under the branch's logs/ directory,
+  which the checks never look at; its path."
   [dir run-id i text]
-  (let [f (io/file dir "runs" run-id (str "step-" i ".log"))]
+  (let [f (io/file dir "logs" run-id (str "step-" i ".log"))]
     (io/make-parents f)
     (spit f text)
     (str f)))
 
-(defn- run-attempt!
-  "One attempt: pre-snapshot, agent, post-snapshot, violations, restore when
-  needed, then append the attempt to the record. The record is written after
-  the restore so a tampering agent cannot roll back the runner's own entry.
-  The agent runs in work-dir (a run worktree, or the project root); in a
-  worktree run the runner's state and the main checkout are watched too."
-  [{:keys [root dir run-id work-dir eb timetable writes worktree?] :as ctx} i step n context record]
+(defn- prepare-member!
+  "Build a member's command and write its agent profile. This happens before
+  the baseline snapshot, so the profile is not mistaken for a change. A command
+  step runs its own argv; a problem or an unwritable profile is a :launch-error."
+  [{:keys [work-dir timetable] :as ctx} [i step] context]
   (let [agent (get-in timetable [:agents (:agent step)])
-        harness (get-in timetable [:harnesses (:harness agent)])
-        cmd     (when (map? (:command step)) (:command step))
-        capture (when (pipeline/stream? (:artifact cmd)) (:artifact cmd))
-        artifact (when (string? (:artifact cmd)) (:artifact cmd))
+        cmd   (when (map? (:command step)) (:command step))
         {:keys [command problem]} (if (pipeline/command-step? step)
-                                    {:command {:argv (get-in step [:command :args])}}
-                                    (pipeline/step-command ctx i step context))
-        launch-error (or (:message problem)
-                         (when-let [profile (:agent-profile command)]
-                           (try
-                             (write-agent-profile! work-dir profile)
-                             nil
-                             (catch IOException e
-                               (str "Cannot write agent profile: " (.getMessage e))))))
+                                    {:command {:argv (:args cmd)}}
+                                    (pipeline/step-command ctx i step context))]
+    {:i i :step step :agent agent :command command
+     :harness (get-in timetable [:harnesses (:harness agent)])
+     :capture (when (pipeline/stream? (:artifact cmd)) (:artifact cmd))
+     :artifact (when (string? (:artifact cmd)) (:artifact cmd))
+     :launch-error (or (:message problem)
+                       (when-let [profile (:agent-profile command)]
+                         (try
+                           (write-agent-profile! work-dir profile)
+                           nil
+                           (catch IOException e
+                             (str "Cannot write agent profile: " (.getMessage e))))))}))
+
+(defn- launch-member!
+  "Run a prepared member's process in work-dir; its outcome."
+  [{:keys [work-dir config]} {:keys [step agent harness command launch-error capture]}]
+  (if launch-error
+    {:process :harness-error :exit-code nil :out "" :err launch-error}
+    (harness/start (:argv command) work-dir
+                   {:stdin (:stdin command)
+                    :env {"GIT_DIR" "/nonexistent"}
+                    :merge-err? (= :both capture)
+                    :exit-reasons (when harness (plugins/exit-reasons config harness))
+                    :timeout-ms (or (:timeout-ms step) (:timeout-ms agent)
+                                    pipeline/default-timeout-ms)})))
+
+(defn- launch-all!
+  "Run every member's process, together when there is more than one; their
+  outcomes, in member order."
+  [ctx plans]
+  (if (= 1 (count plans))
+    [(launch-member! ctx (first plans))]
+    (->> plans (mapv #(future (launch-member! ctx %))) (mapv deref))))
+
+(defn- run-attempt!
+  "One attempt of a group (one step, or concurrent steps): pre-snapshot, the
+  agents, post-snapshot, violations, restore when needed, then append each
+  member's attempt to the record. The record is written after the restore so a
+  tampering agent cannot roll back the runner's own entry. The agents run in
+  work-dir (a run worktree, or the project root); in a worktree run the
+  runner's state and the main checkout are watched too. Concurrent members
+  share one snapshot pair: a change cannot be attributed to one of them, so
+  each is held to its own :writes and all are rolled back together. Returns
+  the entries, in member order."
+  [{:keys [root dir run-id work-dir eb writes worktree?] :as ctx} members n contexts record]
+  (let [plans   (mapv #(prepare-member! ctx %1 %2) members contexts)
         watch   #(when worktree? (git/watch-snapshot root eb))
         before  (git/snapshot work-dir)
         wbefore (watch)
         gbefore (git/git-dir-hashes root)
-        run (if launch-error
-              {:process :harness-error :exit-code nil :out "" :err launch-error}
-              (harness/start (:argv command) work-dir
-                             {:stdin (:stdin command)
-                              :env {"GIT_DIR" "/nonexistent"}
-                              :merge-err? (= :both capture)
-                              :exit-reasons (when harness
-                                              (plugins/exit-reasons (:config ctx) harness))
-                              :timeout-ms (or (:timeout-ms step) (:timeout-ms agent)
-                                              pipeline/default-timeout-ms)}))
-        missing-artifact (when (and artifact (= :ok (:process run))
-                                    (not (.exists (io/file work-dir artifact))))
-                           artifact)
-        log     (when (and capture (not launch-error))
-                  (write-step-log! dir run-id i (pipeline/capture-text capture run)))
+        runs    (launch-all! ctx plans)
         after   (git/snapshot work-dir)
         wafter  (watch)
         gafter  (git/git-dir-hashes root)
@@ -242,67 +262,100 @@
         tree-changes (fn [k] (when worktree?
                                (git/changed-paths root {:tree (k wbefore)} {:tree (k wafter)})))
         state-changed (tree-changes :state)
-        parsed (pipeline/parse-agent-output (:out run))
-        violations (into (pipeline/step-violations agent before after changed parsed)
-                         (pipeline/watcher-violations
-                          {:state-changed state-changed
-                           :main-changed (tree-changes :main)
-                           :git-dir-before gbefore :git-dir-after gafter}))
-        retryable? (boolean (some (complement pipeline/stop-violation?) violations))
+        watcher (pipeline/watcher-violations
+                 {:state-changed state-changed
+                  :main-changed (tree-changes :main)
+                  :git-dir-before gbefore :git-dir-after gafter})
+        judged  (mapv (fn [{:keys [agent artifact]} run]
+                        (let [parsed (pipeline/parse-agent-output (:out run))]
+                          {:parsed parsed
+                           :missing-artifact (when (and artifact (= :ok (:process run))
+                                                        (not (.exists (io/file work-dir artifact))))
+                                               artifact)
+                           :violations (into (pipeline/step-violations agent before after changed parsed)
+                                             watcher)}))
+                      plans runs)
+        retryable? (boolean (some (fn [{:keys [violations]}]
+                                    (some (complement pipeline/stop-violation?) violations))
+                                  judged))
         _ (when retryable?
             (git/restore! work-dir before after)
             (when (seq state-changed)
               (git/restore-tree! root (:state wbefore) (:state wafter))))
         recreated (ensure-dirs! work-dir writes)
-        entry (merge run
-                     {:entry :attempt :step i :agent (pipeline/step-label step) :attempt n
-                      :argv (:argv command) :stdin (:stdin command)
-                      :before before :after after :changed changed
-                      :writes-trees {:before (git/dir-trees work-dir before writes)
-                                     :after  (git/dir-trees work-dir after writes)}
-                      :recreated-dirs recreated
-                      :missing-artifact missing-artifact
-                      :log log
-                      :verdict (pipeline/step-verdict step (assoc run :missing-artifact missing-artifact) parsed)
-                      :violations violations
-                      :restored? retryable?
-                      :stopped? (boolean (some pipeline/stop-violation? violations))
-                      :needs-outside-jurisdiction
-                      (get-in parsed [:output :needs-outside-jurisdiction] [])})]
-    (append! record entry)
-    entry))
+        trees   {:before (git/dir-trees work-dir before writes)
+                 :after  (git/dir-trees work-dir after writes)}
+        entries (mapv
+                 (fn [{:keys [i step command launch-error capture]} run
+                      {:keys [parsed missing-artifact violations]}]
+                   (merge run
+                          {:entry :attempt :step i :agent (pipeline/step-label step) :attempt n
+                           :argv (:argv command) :stdin (:stdin command)
+                           :before before :after after :changed changed
+                           :writes-trees trees
+                           :recreated-dirs recreated
+                           :missing-artifact missing-artifact
+                           :log (when (and capture (not launch-error))
+                                  (write-step-log! dir run-id i (pipeline/capture-text capture run)))
+                           :verdict (pipeline/step-verdict step (assoc run :missing-artifact missing-artifact) parsed)
+                           :violations violations
+                           :restored? retryable?
+                           :stopped? (boolean (some pipeline/stop-violation? violations))
+                           :needs-outside-jurisdiction
+                           (get-in parsed [:output :needs-outside-jurisdiction] [])}))
+                 plans runs judged)]
+    (run! #(append! record %) entries)
+    entries))
+
+(defn- entry-status
+  "Calculate how one attempt ended: :violations, :redirect, :ok or :step-failed."
+  [step entry]
+  (cond
+    (seq (:violations entry))
+    :violations
+
+    (and (pipeline/verdict-trips? step (:verdict entry))
+         (or (pipeline/command-step? step) (pipeline/step-continues? entry)))
+    :redirect
+
+    (pipeline/step-continues? entry) :ok
+    :else :step-failed))
+
+(def ^:private status-priority {:violations 0 :step-failed 1 :redirect 2 :ok 3})
+
+(defn- settled
+  "Calculate a group's result: its most serious member entry, with the group's
+  :step-status."
+  [statuses entries]
+  (let [[entry status] (first (sort-by (comp status-priority second)
+                                       (map vector entries statuses)))]
+    (assoc entry :step-status status)))
 
 (defn- run-step!
-  "Run a step, retrying it after a rollback while violations persist and the
-  agent's retry bound allows. A violation outside the worktree stops the run
-  at once. `context` is the first attempt's context (a verdict that redirected
-  the run here). Returns the last attempt with :step-status, :redirect when
-  the step's verdict sends the run back."
-  [ctx i step record context]
-  (let [agent (get-in (:timetable ctx) [:agents (:agent step)])
-        bound (cond (pipeline/command-step? step) 0 ; nothing to tell a command
-                    :else (or (:max-violation-retries agent)
-                              pipeline/default-max-violation-retries))]
-    (loop [n 0 context context]
-      (let [entry (run-attempt! ctx i step n context record)]
-        (cond
-          (:stopped? entry)
-          (assoc entry :step-status :violations)
-
-          (empty? (:violations entry))
-          (assoc entry :step-status
-                 (cond
-                   (and (pipeline/verdict-trips? step (:verdict entry))
-                        (or (pipeline/command-step? step) (pipeline/step-continues? entry)))
-                   :redirect
-                   (pipeline/step-continues? entry) :ok
-                   :else :step-failed))
-
-          (< n bound)
-          (recur (inc n) {:violations (:violations entry) :writes (:writes agent)})
-
-          :else
-          (assoc entry :step-status :violations))))))
+  "Run a group of steps, retrying it after a rollback while violations persist
+  and the least tolerant member's retry bound allows. A violation outside the
+  worktree stops the run at once. `context` is the first attempt's context (a
+  verdict that redirected the run here). Returns the most serious member's last
+  attempt with :step-status, :redirect when the step's verdict sends the run
+  back."
+  [ctx members record context]
+  (let [agents (mapv (fn [[_ step]] (get-in (:timetable ctx) [:agents (:agent step)])) members)
+        bound  (apply min (map (fn [[_ step] agent]
+                                 (if (pipeline/command-step? step) ; nothing to tell a command
+                                   0
+                                   (or (:max-violation-retries agent)
+                                       pipeline/default-max-violation-retries)))
+                               members agents))]
+    (loop [n 0 contexts (vec (repeat (count members) context))]
+      (let [entries (run-attempt! ctx members n contexts record)]
+        (if (and (< n bound)
+                 (not-any? :stopped? entries)
+                 (some (comp seq :violations) entries))
+          (recur (inc n) (mapv (fn [entry agent]
+                                 {:violations (:violations entry) :writes (:writes agent)})
+                               entries agents))
+          (settled (map (fn [[_ step] entry] (entry-status step entry)) members entries)
+                   entries))))))
 
 (defn- announce!
   "Log a stage event at info, keeping the progress line clear of the log output
@@ -314,14 +367,14 @@
     (when event (draw! event))))
 
 (defn- run-stage!
-  "Run step i, announcing its start and end."
-  [ctx i step record total context]
-  (let [agent (pipeline/step-label step)
-        event #(hash-map :index i :total total :agent agent :phase %)]
-    (announce! ctx (pipeline/stage-started-message i total agent) (event :running))
-    (let [entry (run-step! ctx i step record context)
+  "Run a group of steps, announcing its start and end."
+  [ctx members record total context]
+  (let [agent (keyword (str/join "+" (map (comp name pipeline/step-label second) members)))
+        event #(hash-map :index (ffirst members) :total total :agent agent :phase %)]
+    (announce! ctx (pipeline/stage-started-message (ffirst members) total agent) (event :running))
+    (let [entry (run-step! ctx members record context)
           status (:step-status entry)]
-      (announce! ctx (pipeline/stage-finished-message i total agent status)
+      (announce! ctx (pipeline/stage-finished-message (ffirst members) total agent status)
                  (when (= :ok status) (event :done)))
       entry)))
 
@@ -340,7 +393,8 @@
         ctx      (assoc ctx :work-dir work-dir)
         created  (ensure-dirs! work-dir writes)
         record   (io/file dir "runs" (str run-id ".edn"))
-        steps    (get-in timetable [:pipelines pipeline-name :steps])]
+        steps    (get-in timetable [:pipelines pipeline-name :steps])
+        groups   (pipeline/step-groups steps)]
     (io/make-parents record)
     (append! record (cond-> {:entry :header :pipeline pipeline-name
                              :writes writes :created-dirs created
@@ -349,21 +403,23 @@
                              :timetable-sha256 (sha256 (pr-str (pipeline/canonical timetable)))}
                       wt (assoc :worktree wt)
                       (:reused? wt) (assoc :resumed? true)))
-    (loop [i 0 done [] redirects {} context {}]
-      (if (= i (count steps))
+    (loop [g 0 done [] redirects {} context {}]
+      (if (= g (count groups))
         (finish! record :success done nil wt)
-        (let [step  (nth steps i)
-              entry (run-stage! ctx i step record (count steps) context)
-              done  (conj done entry)]
+        (let [members (mapv #(vector % (nth steps %)) (nth groups g))
+              entry   (run-stage! ctx members record (count steps) context)
+              done    (conj done entry)
+              i       (:step entry)
+              step    (nth steps i)]
           (case (:step-status entry)
-            :ok (recur (inc i) done redirects {})
+            :ok (recur (inc g) done redirects {})
             :redirect
             (let [used   (get redirects i 0)
                   target (pipeline/redirect-target steps i step)]
               (if (>= used (pipeline/redirect-max step))
                 (finish! record :review-failed done i wt)
                 (do (append! record {:entry :redirect :from i :to target :count (inc used)})
-                    (recur target done (assoc redirects i (inc used))
+                    (recur (pipeline/group-index groups target) done (assoc redirects i (inc used))
                            {:verdict (:verdict entry) :from (pipeline/step-label step)}))))
             (finish! record (:step-status entry) done i wt)))))))
 

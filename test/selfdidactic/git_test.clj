@@ -109,9 +109,12 @@
       (is (= (:tree before) (:tree (sut/restore! dir before after))))
       (is (.isFile (io/file dir "src/a.clj"))))))
 
-(deftest snapshots-skip-worktrees-and-db
+(deftest snapshots-skip-worktrees-db-and-logs
   (let [dir (make-repo)
         before (sut/snapshot dir)]
+    (testing "logs/ is never part of a snapshot"
+      (put! dir ".switchfield/main/logs/r1/step-0.log" "x")
+      (is (= (:tree before) (:tree (sut/snapshot dir)))))
     (testing "reserved db/ state is never part of a snapshot"
       (put! dir ".switchfield/main/db/data.mdb" "x")
       (is (= (:tree before) (:tree (sut/snapshot dir)))))
@@ -132,9 +135,10 @@
       (let [w1 (sut/watch-snapshot dir "main")]
         (is (not= (:state w0) (:state w1)))
         (is (= (:main w0) (:main w1)))))
-    (testing "db/ under runner state is not watched"
+    (testing "db/ and logs/ under runner state are not watched"
       (let [w1 (sut/watch-snapshot dir "main")]
         (put! dir ".switchfield/main/db/data.mdb" "x")
+        (put! dir ".switchfield/main/logs/r1/step-0.log" "x")
         (is (= w1 (sut/watch-snapshot dir "main")))))
     (testing "a change elsewhere in the main checkout moves :main only"
       (let [w1 (sut/watch-snapshot dir "main")]
