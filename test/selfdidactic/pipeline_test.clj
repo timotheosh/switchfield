@@ -254,3 +254,31 @@
       (is (= #{:bad-verdict-fn} (probs {:agent :r :verdict :f :redirect {:agent :w :verdict 'eval}})))
       (is (= #{:bad-redirect-max} (probs {:agent :r :verdict :f :redirect {:agent :w :max 0}})))
       (is (= #{:bad-redirect} (probs {:agent :r :verdict :f :redirect {:agent :w :x 1}}))))))
+
+(deftest concurrent-steps-test
+  (testing "adjacent :concurrent steps form one group; every other step is alone"
+    (is (= [[0] [1 2 3] [4]]
+           (sut/step-groups [{} {:concurrent true} {:concurrent true} {:concurrent true} {}])))
+    (is (= [[0] [1] [2]] (sut/step-groups [{} {:concurrent false} {}])))
+    (is (= 1 (sut/group-index [[0] [1 2] [3]] 2))))
+  (testing "concurrent agents may not write"
+    (let [with-pipeline (fn [steps agents]
+                          (-> ctx
+                              (assoc-in [:timetable :agents] (merge (:agents timetable) agents))
+                              (assoc-in [:timetable :pipelines :dev :steps] steps)))
+          ro {:ro {:harness :fake :model "true" :writes []}}
+          rev (fn [& {:as more}] (merge {:agent :ro :prompt :p :concurrent true} more))]
+      (is (empty? (sut/pipeline-problems
+                   (with-pipeline [(rev) (rev)] ro))))
+      (is (= [{:problem :concurrent-writes :step 1 :agent :impl :writes ["src/"]}]
+             (filter #(= :concurrent-writes (:problem %))
+                     (sut/pipeline-problems
+                      (with-pipeline [(rev) (rev :agent :impl)] ro)))))
+      (testing "a sequential step is not held to it"
+        (is (empty? (sut/pipeline-problems
+                     (with-pipeline [(rev) (rev) {:agent :impl :prompt :p}] ro)))))
+      (testing "a concurrent step cannot redirect"
+        (is (contains? (problem-kinds
+                        (with-pipeline [{:agent :impl :prompt :p}
+                                        (rev :verdict :f :redirect {:agent :impl}) (rev)] ro))
+                       :concurrent-redirect))))))

@@ -112,7 +112,7 @@ they are merged on top of the shared ones (same rules as below), so a branch
 overrides only the keys it names. Prompt and skill paths are looked up in the
 branch directory first, then in =.switchfield/=. =selfdidactic.timetable/load-dirs=
 does the layered load. The branch directory also holds that branch's run state
-(=lock=, =runs/=, =db/=), and is created on the first run if it does not exist.
+(=lock=, =runs/=, =logs/=, =db/=), and is created on the first run if it does not exist.
 
 *** Merging
 Fragments are merged recursively. When both values are maps they merge;
@@ -165,7 +165,8 @@ $ clojure -M:run-m --spec spec.md --pipeline development
 The timetable is read from =<project root>/.switchfield/=, then overridden by
 =<project root>/.switchfield/<branch>/= (the branch name has =%= and =/=
 percent-encoded, so =feat/x= is =feat%2Fx=). Prompt and skill paths are
-relative to the directory that holds them, the branch's winning. Steps run in order; each agent
+relative to the directory that holds them, the branch's winning. Steps run in order (except
+[[#concurrent-steps][concurrent steps]]); each agent
 runs in the project root with its prompt file followed by the specification.
 The agent harness is chosen by the =plugin= key of =switchfield.toml=.
 
@@ -187,11 +188,37 @@ so only the git tamper check applies, and the step is never retried.
 
 An =:artifact= is a file path /or/ a stream to capture, never both: =:stdout=,
 =:stderr= or =:both= (interleaved as =2>&1=) saves the
-full output to =.switchfield/<branch>/runs/<run-id>/step-<n>.log= (path in the
+full output to =.switchfield/<branch>/logs/<run-id>/step-<n>.log= (path in the
 attempt's =:log=). When the step fails, its verdict also carries
 =:output=, the clipped text (={:exit-code n :output "..."}=). =:capture-max= is a character count: a
 negative number keeps the last n characters (default =-8000=), a positive one
 the first n; on success there is no verdict.
+
+*** Concurrent steps
+:PROPERTIES:
+:CUSTOM_ID: concurrent-steps
+:END:
+Adjacent agent steps marked =:concurrent true= run at the same time; the run
+goes on when all of them have finished:
+
+#+begin_src clojure
+{:agent :reviewer :prompt :correctness-review :concurrent true}
+{:agent :reviewer :prompt :maintainability-review :concurrent true}
+#+end_src
+
+Concurrent agents share one working tree, so a change cannot be attributed to
+one of them. None of them may write: an agent used in a concurrent step must
+declare =:writes []=, or the pipeline has the problem =:concurrent-writes= and
+nothing runs. The check while running is the usual one for =:writes []=. The
+group is snapshotted once; if anything changed (or HEAD, refs or the index),
+every member is rolled back together and re-run with the violations in its
+prompt, up to the smallest =:max-violation-retries= among them. Each member has
+its own entry in the run record, carrying the same violations.
+
+If a member crashes or times out the step fails (exit 3), but violations take
+precedence (exit 4). A concurrent step cannot have =:redirect=
+(=:concurrent-redirect=) and a command step cannot be concurrent; a redirect
+that targets a concurrent step replays the whole group.
 
 *** Verdicts and redirects
 A step can send the run back to an earlier agent:
@@ -216,9 +243,12 @@ fails as before.
 
 Success is silent apart from the worktree path. Every run appends to
 =.switchfield/<branch>/runs/<run-id>.edn= (header, each attempt, terminal
-entry). A =lock= file in the branch directory stops concurrent runs; a lock
-whose process is dead is reported as stale and cleared only by
-=--force-unlock=.
+entry). A =lock= file in the branch directory stops concurrent runs of that
+branch; a lock whose process is dead is reported as stale and cleared only by
+=--force-unlock=. Runs on different branches of one repository are not
+stopped, but they share the repository's refs: one run's new branch looks like
+git tampering to the other, which rolls it back (deleting it). Do not run them
+at the same time.
 
 *** How a step is checked
 Before anything runs, the orchestrator:
@@ -302,15 +332,16 @@ your checkout:
 
 =.switchfield/= is meant to be committed (it holds the timetable and prompts), so
 switchfield keeps a =.switchfield/.gitignore= for the volatile parts:
-=worktrees/=, =*/lock= and =*/db/=. =db/= is reserved for the orchestrator's own
-state: it is never snapshotted or rolled back.
+=worktrees/=, =*/lock=, =*/db/= and =*/logs/=. =db/= is reserved for the
+orchestrator's own state, and =logs/= holds the output it captures: neither is
+snapshotted, watched or rolled back.
 
 During a worktree run the orchestrator also watches three things outside the
 worktree, taken before and after every attempt:
 
 | Watched                                                  | A change is                                   |
 |----------------------------------------------------------+-----------------------------------------------|
-| the runner's state, =.switchfield/<branch>/= (not =db/=)   | out of jurisdiction: rolled back, step retried |
+| the runner's state, =.switchfield/<branch>/= (not =db/= or =logs/=) | out of jurisdiction: rolled back, step retried |
 | the rest of the main checkout                            | stops the run (exit 4); never rolled back     |
 | the shared git directory: =config=, =hooks/=, =info/=      | stops the run (exit 4); never rolled back     |
 

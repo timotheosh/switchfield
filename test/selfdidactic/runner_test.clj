@@ -340,14 +340,14 @@
       (is (= head (str/trim (gt/sh! (:root env) "git" "rev-parse" "switchfield/main/r1")))))
     (testing "setup order: the .gitignore is written before the baselines, so the first attempt is clean"
       (is (= [] (:violations (first (attempts r)))))
-      (is (= ["worktrees/" "*/lock" "*/db/"]
+      (is (= ["worktrees/" "*/lock" "*/db/" "*/logs/"]
              (str/split-lines (slurp (io/file (:root env) ".switchfield/.gitignore"))))))))
 
 (deftest state-gitignore-keeps-existing-lines
   (let [env (setup!)]
     (gt/put! (:root env) ".switchfield/.gitignore" "mine\nworktrees/\n")
     (wt-run env {:impl (script-agent "cat >/dev/null; true")} [step-impl])
-    (is (= ["mine" "worktrees/" "*/lock" "*/db/"]
+    (is (= ["mine" "worktrees/" "*/lock" "*/db/" "*/logs/"]
            (str/split-lines (slurp (io/file (:root env) ".switchfield/.gitignore")))))))
 
 (deftest dirty-checkout-is-a-problem-unless-allowed
@@ -604,3 +604,55 @@
     (testing "bad settings are problems"
       (is (= [:bad-artifact :bad-capture-max]
              (map :problem (:problems (run {:artifact :out :capture-max 0}))))))))
+
+(deftest worktree-run-does-not-flag-the-runners-own-step-log
+  (let [env (setup!)
+        r   (wt-run env {} [{:command {:args ["echo" "hi"] :artifact :stdout}}])
+        e   (first (attempts r))]
+    (is (= :success (:status r)))
+    (is (empty? (:violations e)))
+    (is (= "hi\n" (slurp (:log e))) "the log survives")))
+
+;; -- Concurrent steps ------------------------------------------------------
+
+(defn- rendezvous-agent
+  "An agent that touches its own marker in a directory outside the repository
+  and waits (at most 10 s) for the partner's: it only succeeds when both run
+  at the same time."
+  [dir me partner]
+  (script-agent (str "cat >/dev/null; touch " dir "/" me "; for i in $(seq 100); do "
+                     "[ -f " dir "/" partner " ] && exit 0; sleep 0.1; done; exit 1")
+                :writes []))
+
+(defn- temp-dir []
+  (str (java.nio.file.Files/createTempDirectory "rv" (make-array java.nio.file.attribute.FileAttribute 0))))
+
+(deftest concurrent-agents-run-at-the-same-time
+  (let [d (temp-dir)
+        r (run-it! (setup!) {:a (rendezvous-agent d "a" "b") :b (rendezvous-agent d "b" "a")}
+                   [{:agent :a :prompt :p :concurrent true}
+                    {:agent :b :prompt :p :concurrent true}])]
+    (is (= :success (:status r)))
+    (is (= [0 1] (map :step (attempts r))) "one attempt entry per member, in order")))
+
+(deftest concurrent-agents-that-write-are-rejected
+  (let [env (setup!)
+        r   (run-it! env {:w (script-agent "true")}
+                     [{:agent :w :prompt :p :concurrent true}
+                      {:agent :w :prompt :p :concurrent true}])]
+    (is (= [:concurrent-writes :concurrent-writes] (problem-kinds r)))
+    (is (not (.exists (io/file (:root env) ".switchfield/main/runs"))) "nothing ran")))
+
+(deftest a-write-by-a-concurrent-agent-rolls-the-whole-group-back
+  (let [env (setup!)
+        ro  {:harness :fake :writes [] :max-violation-retries 0}
+        r   (run-it! env {:bad  (assoc ro :model "cat >/dev/null; mkdir -p src; echo x > src/x.clj")
+                          :good (assoc ro :model "cat >/dev/null; true")}
+                     [{:agent :bad :prompt :p :concurrent true}
+                      {:agent :good :prompt :p :concurrent true}])]
+    (is (= :violations (:status r)))
+    (is (not (.exists (io/file (:root env) "src/x.clj"))) "rolled back")
+    (testing "no write can be attributed, so every member carries the violation"
+      (is (= [[{:violation :out-of-jurisdiction :path "src/x.clj"}]
+              [{:violation :out-of-jurisdiction :path "src/x.clj"}]]
+             (map :violations (attempts r)))))))

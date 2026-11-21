@@ -59,11 +59,13 @@
   (git-line-or-nil dir "symbolic-ref" "--short" "-q" "HEAD"))
 
 (def ^:private volatile-paths
-  "Pathspecs a snapshot never includes: run worktrees, and the reserved
+  "Pathspecs a snapshot never includes: run worktrees, the reserved
   orchestrator state directory (`db/`), which must never be rolled back under
-  an open memory-mapped database. `add -f` ignores .gitignore, so they are
-  removed from the temporary index instead."
-  [".switchfield/worktrees" ":(glob).switchfield/*/db/**"])
+  an open memory-mapped database, and `logs/`, which the runner writes itself.
+  `add -f` ignores .gitignore, so they are removed from the temporary index
+  instead."
+  [".switchfield/worktrees" ":(glob).switchfield/*/db/**"
+   ":(glob).switchfield/*/logs/**"])
 
 (defn- tree-of
   "The tree of the files selected by `adds` (a seq of `git add` argument
@@ -83,7 +85,7 @@
 (defn snapshot
   "Take a content snapshot of repo root dir: the tree of every file in the
   working tree (tracked, untracked and dirty, plus .switchfield/ even when
-  ignored, minus worktrees and `db/`), built in a temporary index. Also
+  ignored, minus worktrees, `db/` and `logs/`), built in a temporary index. Also
   records HEAD, its branch ref, all refs, and the real index by content."
   [dir]
   {:tree     (tree-of dir
@@ -100,14 +102,14 @@
 (defn watch-snapshot
   "Take the snapshots of what an agent running in a worktree must not touch in
   the main checkout `root`, for branch directory `eb`: :state (the runner's
-  own `.switchfield/<eb>`, minus `db/`) and :main (everything else in root
+  own `.switchfield/<eb>`, minus `db/` and `logs/`) and :main (everything else in root
   except worktrees and `db/`)."
   [root eb]
   (let [state (str ".switchfield/" eb)]
     {:state (tree-of root
                      (when (.exists (File. ^String root ^String state))
                        [["-f" "--" state]])
-                     [(str state "/db")])
+                     [(str state "/db") (str state "/logs")])
      :main  (tree-of root [["-A" "--" "."]]
                      (conj volatile-paths state))}))
 
