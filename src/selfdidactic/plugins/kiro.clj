@@ -36,5 +36,5 @@
    :suffix ".json"
    :contents (json/write-str
               {:model model
-               :description (or description (str "Switchyard agent " agent-id))
+               :description (or description (str "Switchfield agent " agent-id))
                :prompt (or system-prompt "")})})

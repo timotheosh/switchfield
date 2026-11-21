@@ -1,5 +1,5 @@
 (ns selfdidactic.git
-  "The orchestrator's git actions. Switchyard runs git only around agent
+  "The orchestrator's git actions. Switchfield runs git only around agent
   handoffs: it snapshots the working tree by content before and after a step,
   and can restore the whole tree, refs, HEAD and index to a snapshot."
   (:require [clojure.set :as set]
@@ -63,14 +63,14 @@
   orchestrator state directory (`db/`), which must never be rolled back under
   an open memory-mapped database. `add -f` ignores .gitignore, so they are
   removed from the temporary index instead."
-  [".switchyard/worktrees" ":(glob).switchyard/*/db/**"])
+  [".switchfield/worktrees" ":(glob).switchfield/*/db/**"])
 
 (defn- tree-of
   "The tree of the files selected by `adds` (a seq of `git add` argument
   vectors) less the `removes` pathspecs, built in a temporary index in dir so
   the real index is untouched."
   [dir adds removes]
-  (let [index (File/createTempFile "switchyard-index-" ".tmp")]
+  (let [index (File/createTempFile "switchfield-index-" ".tmp")]
     (.delete index)
     (try
       (let [opts {:env {"GIT_INDEX_FILE" (str index)}}]
@@ -82,14 +82,14 @@
 
 (defn snapshot
   "Take a content snapshot of repo root dir: the tree of every file in the
-  working tree (tracked, untracked and dirty, plus .switchyard/ even when
+  working tree (tracked, untracked and dirty, plus .switchfield/ even when
   ignored, minus worktrees and `db/`), built in a temporary index. Also
   records HEAD, its branch ref, all refs, and the real index by content."
   [dir]
   {:tree     (tree-of dir
                       (cond-> [["-A" "--" "."]]
-                        (.exists (File. ^String dir ".switchyard"))
-                        (conj ["-f" "--" ".switchyard"]))
+                        (.exists (File. ^String dir ".switchfield"))
+                        (conj ["-f" "--" ".switchfield"]))
                       volatile-paths)
    :head     (git-line-or-nil dir "rev-parse" "--verify" "-q" "HEAD")
    :head-ref (git-line-or-nil dir "symbolic-ref" "-q" "HEAD")
@@ -100,10 +100,10 @@
 (defn watch-snapshot
   "Take the snapshots of what an agent running in a worktree must not touch in
   the main checkout `root`, for branch directory `eb`: :state (the runner's
-  own `.switchyard/<eb>`, minus `db/`) and :main (everything else in root
+  own `.switchfield/<eb>`, minus `db/`) and :main (everything else in root
   except worktrees and `db/`)."
   [root eb]
-  (let [state (str ".switchyard/" eb)]
+  (let [state (str ".switchfield/" eb)]
     {:state (tree-of root
                      (when (.exists (File. ^String root ^String state))
                        [["-f" "--" state]])
@@ -200,11 +200,11 @@
 
 (defn dirty-paths
   "The tracked paths of dir with uncommitted changes (untracked files and
-  .switchyard/ are not considered)."
+  .switchfield/ are not considered)."
   [dir]
   (mapv #(subs % 3)
         (split-nul (git! dir {} "status" "--porcelain" "-z" "--no-renames"
-                         "--untracked-files=no" "--" "." ":(exclude).switchyard"))))
+                         "--untracked-files=no" "--" "." ":(exclude).switchfield"))))
 
 (defn branch-exists?
   "Whether a local branch of that name exists in dir's repository."

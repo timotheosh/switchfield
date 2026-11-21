@@ -6,7 +6,7 @@
       <pattern>%d{HH:mm:ss} %-5level %msg%n</pattern>
     </encoder>
   </appender>
-  <root level="${SWITCHYARD_LOG_LEVEL:-INFO}">
+  <root level="${SWITCHFIELD_LOG_LEVEL:-INFO}">
     <appender-ref ref="STDERR"/>
   </root>
 </configuration>

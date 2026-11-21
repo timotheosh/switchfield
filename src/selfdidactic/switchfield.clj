@@ -1,4 +1,4 @@
-(ns selfdidactic.switchyard
+(ns selfdidactic.switchfield
   (:gen-class)
   (:require [selfdidactic.cli :as cli]))
 

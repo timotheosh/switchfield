@@ -10,7 +10,7 @@
            [java.nio.file.attribute FileAttribute]))
 
 (def expected-help
-  (str "Usage: switchyard [options]\n\n"
+  (str "Usage: switchfield [options]\n\n"
        "Options:\n"
        "  -h, --help             Show this help\n"
        "  -v, --version          Show program version\n"
@@ -26,7 +26,7 @@
        "      --allow-dirty      start although the checkout has uncommitted changes\n"
        "      --headless         no progress line on the terminal (log output is unchanged)\n"))
 
-(def expected-version "switchyard 0.1.0-SNAPSHOT\n")
+(def expected-version "switchfield 0.1.0-SNAPSHOT\n")
 
 (defn run-cli
   [args]
@@ -41,7 +41,7 @@
 
 (defn temp-spec
   [suffix contents]
-  (let [path (Files/createTempFile "switchyard-test-" suffix
+  (let [path (Files/createTempFile "switchfield-test-" suffix
                                    (make-array FileAttribute 0))]
     (Files/writeString path contents StandardCharsets/UTF_8
                        (make-array OpenOption 0))
@@ -197,7 +197,7 @@
         (finally
           (Files/deleteIfExists path)))))
   (testing "directory instead of a regular file"
-    (let [root (Files/createTempDirectory "switchyard-test-"
+    (let [root (Files/createTempDirectory "switchfield-test-"
                                           (make-array FileAttribute 0))
           directory (Files/createDirectory (.resolve root "spec.org")
                                            (make-array FileAttribute 0))]
@@ -235,7 +235,7 @@
       (is (str/includes? (first (:errors r)) "Missing required configuration"))))
   (testing "4. complete + --validate, spec from file or CLI"
     (is (= {:kind :validate :config complete :path "a.md"
-            :source "resource switchyard.toml"}
+            :source "resource switchfield.toml"}
            (sut/resolve-command (run-command {} :validate? true) complete)))
     (is (= {:kind :validate :config {:spec "b.md"} :path "b.md"
             :source "--spec"}
@@ -316,7 +316,7 @@
                          :err "Cannot run program"}]})]
         (is (= 3 (:exit-code r)))
         (is (str/includes? (:stderr r) "Cannot run program"))))
-    (testing "the agent's own exit code is never switchyard's"
+    (testing "the agent's own exit code is never switchfield's"
       (is (= 3 (:exit-code (sut/outcome->response
                             {:status :step-failed :step 0 :record "r"
                              :steps [(assoc step :exit-code 4)]})))))
@@ -352,17 +352,17 @@
              (:kind (resolve ["--pipeline" "dev"] {:spec "s.md" :worktree "yes"})))))))
 
 (deftest outcome->response-worktree
-  (let [wt {:path "/r/.switchyard/worktrees/main-r1" :branch "b" :run-id "r1" :reused? false}
+  (let [wt {:path "/r/.switchfield/worktrees/main-r1" :branch "b" :run-id "r1" :reused? false}
         step {:agent :impl :process :crashed :exit-code 1 :violations []}]
     (testing "success prints only the worktree path; without a worktree it stays silent"
-      (is (= {:exit-code 0 :stdout "worktree: /r/.switchyard/worktrees/main-r1"}
+      (is (= {:exit-code 0 :stdout "worktree: /r/.switchfield/worktrees/main-r1"}
              (sut/outcome->response {:status :success :worktree wt})))
       (is (= {:exit-code 0} (sut/outcome->response {:status :success}))))
     (testing "failures name the worktree"
       (is (str/includes? (:stderr (sut/outcome->response
                                    {:status :step-failed :step 0 :steps [step]
                                     :record "r.edn" :worktree wt}))
-                         "worktree: /r/.switchyard/worktrees/main-r1")))
+                         "worktree: /r/.switchfield/worktrees/main-r1")))
     (testing "a run stopped by a change outside its worktree says nothing was rolled back there"
       (let [r (sut/outcome->response
                {:status :violations :step 0 :record "r.edn" :worktree wt

@@ -3,9 +3,9 @@
   (:require [clojure.tools.build.api :as b]
             [selfdidactic.version :as app-version]))
 
-(def lib 'net.clojars.selfdidactic/switchyard)
+(def lib 'net.clojars.selfdidactic/switchfield)
 (def version app-version/program-version)
-(def main 'selfdidactic.switchyard)
+(def main 'selfdidactic.switchfield)
 (def class-dir "target/classes")
 
 (defn test "Run all the tests." [opts]

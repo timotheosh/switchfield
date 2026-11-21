@@ -16,7 +16,7 @@
       (is (= expected-process (:process (sut/classify result)))))))
 
 (defn- temp-dir []
-  (str (Files/createTempDirectory "switchyard-harness-" (make-array FileAttribute 0))))
+  (str (Files/createTempDirectory "switchfield-harness-" (make-array FileAttribute 0))))
 
 (defn- sh [script & [options]]
   (sut/start ["sh" "-c" script] (temp-dir) (or options {})))

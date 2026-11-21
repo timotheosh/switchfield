@@ -11,9 +11,9 @@
             [selfdidactic.version :as version])
   (:import [java.io IOException]))
 
-(def program-name "switchyard")
+(def program-name "switchfield")
 
-;; switchyard's own process exit codes (0 is success). They say what happened to
+;; switchfield's own process exit codes (0 is success). They say what happened to
 ;; the run, not what the agent returned: an agent's exit code appears only in
 ;; the failure message and the run record.
 (def exit-problem

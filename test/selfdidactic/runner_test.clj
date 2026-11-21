@@ -15,9 +15,9 @@
   "A repo with a branch dir holding one prompt and no lock."
   []
   (let [root (gt/make-repo)
-        dir  (str root "/.switchyard/main")]
+        dir  (str root "/.switchfield/main")]
     (.delete (io/file dir "lock"))
-    (gt/put! root ".switchyard/main/p.md" "PROMPT")
+    (gt/put! root ".switchfield/main/p.md" "PROMPT")
     {:root root :dir dir}))
 
 (defn- run-it!
@@ -39,10 +39,10 @@
 
 (defn- attempts [result] (filter #(= :attempt (:entry %)) (entries result)))
 
-(defn- outside-switchyard
-  "Paths changed since a snapshot, ignoring runner-owned .switchyard/."
+(defn- outside-switchfield
+  "Paths changed since a snapshot, ignoring runner-owned .switchfield/."
   [root before]
-  (remove #(str/starts-with? % ".switchyard/")
+  (remove #(str/starts-with? % ".switchfield/")
           (git/changed-paths root before (git/snapshot root))))
 
 (def step-tw {:agent :tw :prompt :p})
@@ -99,7 +99,7 @@
     (is (= :violations (:status r)))
     (is (= 0 (:step r)))
     (testing "the whole step is rolled back, in-jurisdiction changes included"
-      (is (empty? (outside-switchyard (:root env) before)))
+      (is (empty? (outside-switchfield (:root env) before)))
       (is (not (.exists (io/file (:root env) "deps.edn"))))
       (is (not (.exists (io/file (:root env) "src/ok.clj")))))
     (testing "every attempt is recorded, each with its violations"
@@ -138,13 +138,13 @@
 
 (deftest tampering-with-the-record-cannot-erase-the-runners-entries
   (let [env (setup!)
-        r (run-it! env {:impl (script-agent "cat >/dev/null; echo junk > .switchyard/main/runs/zzz.edn"
+        r (run-it! env {:impl (script-agent "cat >/dev/null; echo junk > .switchfield/main/runs/zzz.edn"
                                   :max-violation-retries 0)}
                 [step-impl])]
     (is (= :violations (:status r)))
     (is (not (.exists (io/file (:dir env) "runs/zzz.edn"))))
     (is (= [:header :attempt :terminal] (map :entry (entries r))))
-    (is (= [".switchyard/main/runs/zzz.edn"] (map :path (:violations (first (attempts r))))))))
+    (is (= [".switchfield/main/runs/zzz.edn"] (map :path (:violations (first (attempts r))))))))
 
 (deftest expected-output-is-checked
   (testing ":must-change with an empty diff is :no-work"
@@ -288,13 +288,13 @@
     (is (.isFile (io/file (:root env) "README.md")))))
 
 ;; -- Worktree runs ---------------------------------------------------------
-;; In a worktree run the agent's cwd is R/.switchyard/worktrees/main-<id>, so
+;; In a worktree run the agent's cwd is R/.switchfield/worktrees/main-<id>, so
 ;; ../../main is the runner's state directory and ../../.. is the main checkout.
 
 (defn- wt-run [env agents steps & [extra]]
   (run-it! env agents steps (merge {:worktree? true :run-id "r1"} extra)))
 
-(defn- wt-path [env id] (str (:root env) "/.switchyard/worktrees/main-" id))
+(defn- wt-path [env id] (str (:root env) "/.switchfield/worktrees/main-" id))
 
 (defn- kinds [r] (map :violation (:violations (first (attempts r)))))
 
@@ -311,25 +311,25 @@
       (is (not (.exists (io/file (:root env) "src/new.clj"))))
       (is (str/blank? (gt/sh! (:root env) "git" "status" "--porcelain"))))
     (testing "it ran on a new branch, and the worktree is reported"
-      (is (str/includes? (gt/sh! (:root env) "git" "branch" "--list" "switchyard/main/r1")
-                         "switchyard/main/r1"))
-      (is (= {:path wt :branch "switchyard/main/r1" :run-id "r1" :reused? false}
+      (is (str/includes? (gt/sh! (:root env) "git" "branch" "--list" "switchfield/main/r1")
+                         "switchfield/main/r1"))
+      (is (= {:path wt :branch "switchfield/main/r1" :run-id "r1" :reused? false}
              (:worktree r)))
       (is (= (:worktree r) (:worktree (header r)))))
     (testing "nothing is committed or moved"
       (is (= head (str/trim (gt/sh! (:root env) "git" "rev-parse" "HEAD"))))
-      (is (= head (str/trim (gt/sh! (:root env) "git" "rev-parse" "switchyard/main/r1")))))
+      (is (= head (str/trim (gt/sh! (:root env) "git" "rev-parse" "switchfield/main/r1")))))
     (testing "setup order: the .gitignore is written before the baselines, so the first attempt is clean"
       (is (= [] (:violations (first (attempts r)))))
       (is (= ["worktrees/" "*/lock" "*/db/"]
-             (str/split-lines (slurp (io/file (:root env) ".switchyard/.gitignore"))))))))
+             (str/split-lines (slurp (io/file (:root env) ".switchfield/.gitignore"))))))))
 
 (deftest state-gitignore-keeps-existing-lines
   (let [env (setup!)]
-    (gt/put! (:root env) ".switchyard/.gitignore" "mine\nworktrees/\n")
+    (gt/put! (:root env) ".switchfield/.gitignore" "mine\nworktrees/\n")
     (wt-run env {:impl (script-agent "cat >/dev/null; true")} [step-impl])
     (is (= ["mine" "worktrees/" "*/lock" "*/db/"]
-           (str/split-lines (slurp (io/file (:root env) ".switchyard/.gitignore")))))))
+           (str/split-lines (slurp (io/file (:root env) ".switchfield/.gitignore")))))))
 
 (deftest dirty-checkout-is-a-problem-unless-allowed
   (let [agents {:impl (script-agent "cat >/dev/null; true")}]
@@ -346,9 +346,9 @@
         (let [r (wt-run env agents [step-impl] {:allow-dirty? true})]
           (is (= :success (:status r)))
           (is (= "a1" (slurp (io/file (wt-path env "r1") "src/a.clj")))))))
-    (testing ".switchyard/ edits and untracked files are not dirty"
+    (testing ".switchfield/ edits and untracked files are not dirty"
       (let [env (setup!)]
-        (gt/put! (:root env) ".switchyard/main/p.md" "edited")
+        (gt/put! (:root env) ".switchfield/main/p.md" "edited")
         (gt/put! (:root env) "untracked.txt" "x")
         (is (= :success (:status (wt-run env agents [step-impl]))))))))
 
@@ -383,12 +383,12 @@
           (is (= :unregistered-directory (:reason (first (:problems r))))))))
     (testing "a branch without its worktree"
       (let [env (setup!)]
-        (gt/sh! (:root env) "git" "branch" "switchyard/main/r3")
+        (gt/sh! (:root env) "git" "branch" "switchfield/main/r3")
         (is (= :branch-without-worktree
                (:reason (first (:problems (wt-run env agents [step-impl] {:run-id "r3"}))))))))
-    (testing "a branch named switchyard blocks switchyard/<branch>/<id>, caught before git errors"
+    (testing "a branch named switchfield blocks switchfield/<branch>/<id>, caught before git errors"
       (let [env (setup!)]
-        (gt/sh! (:root env) "git" "branch" "switchyard")
+        (gt/sh! (:root env) "git" "branch" "switchfield")
         (let [r (wt-run env agents [step-impl])]
           (is (= [:worktree-conflict] (problem-kinds r)))
           (is (= :ref-conflict (:reason (first (:problems r))))))))))
@@ -400,7 +400,7 @@
                     [step-impl])]
     (is (= :violations (:status r)))
     (is (= [:out-of-jurisdiction] (kinds r)))
-    (is (= [".switchyard/main/runs/zzz.edn"] (map :path (:violations (first (attempts r))))))
+    (is (= [".switchfield/main/runs/zzz.edn"] (map :path (:violations (first (attempts r))))))
     (is (not (.exists (io/file (:dir env) "runs/zzz.edn"))))
     (testing "the record survived the rollback"
       (is (= [:header :attempt :terminal] (map :entry (entries r)))))))
@@ -435,8 +435,8 @@
   (doseq [[label run script]
           [["worktree" wt-run (str "cat >/dev/null; mkdir -p ../../main/db; "
                                    "echo x > ../../main/db/data.mdb; echo y > deps.edn")]
-           ["in place" run-it! (str "cat >/dev/null; mkdir -p .switchyard/main/db; "
-                                    "echo x > .switchyard/main/db/data.mdb; echo y > deps.edn")]]]
+           ["in place" run-it! (str "cat >/dev/null; mkdir -p .switchfield/main/db; "
+                                    "echo x > .switchfield/main/db/data.mdb; echo y > deps.edn")]]]
     (testing label
       (let [env (setup!)
             r   (run env {:impl (script-agent script :max-violation-retries 0)} [step-impl])]
@@ -468,7 +468,7 @@
   (doseq [[plugin directory suffix] [["opencode" ".opencode" ".md"]
                                      ["kiro" ".kiro" ".json"]]]
     (let [{:keys [root] :as env} (setup!)
-          profile (io/file root directory "agents" (str "switchyard-impl" suffix))
+          profile (io/file root directory "agents" (str "switchfield-impl" suffix))
           other (io/file root directory "agents" (str "manual" suffix))
           start harness/start
           action (atom :ok)]
@@ -478,7 +478,7 @@
                     (fn [argv work-dir & [{:keys [stdin] :as options}]]
                       (if (= plugin (first argv))
                         (do
-                          (is (= ["--agent" "switchyard-impl"] (vec (take-last 2 argv))))
+                          (is (= ["--agent" "switchfield-impl"] (vec (take-last 2 argv))))
                           (is (str/starts-with? stdin "PROMPT"))
                           (is (.isFile profile))
                           (when (= :tamper @action) (spit profile "changed by agent"))
@@ -501,7 +501,7 @@
                (set (.list (.getParentFile profile)))))))))
 
 (deftest rejects-symlinked-native-profile-paths
-  (doseq [relative [".kiro" ".kiro/agents/switchyard-impl.json"]]
+  (doseq [relative [".kiro" ".kiro/agents/switchfield-impl.json"]]
     (let [{:keys [root] :as env} (setup!)
           path (io/file root relative)
           target (io/file root "README.md")]

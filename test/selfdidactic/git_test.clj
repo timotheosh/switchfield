@@ -17,9 +17,9 @@
     (spit f content)))
 
 (defn make-repo
-  "A repo with one commit: src/a.clj, test/t.clj, an ignored .switchyard/."
+  "A repo with one commit: src/a.clj, test/t.clj, an ignored .switchfield/."
   []
-  (let [dir (str (Files/createTempDirectory "switchyard-git-" (make-array FileAttribute 0)))]
+  (let [dir (str (Files/createTempDirectory "switchfield-git-" (make-array FileAttribute 0)))]
     (sh! dir "git" "init" "-q" "-b" "main")
     (sh! dir "git" "config" "user.email" "t@example.com")
     (sh! dir "git" "config" "user.name" "t")
@@ -27,8 +27,8 @@
     (sh! dir "git" "config" "tag.gpgsign" "false")
     (put! dir "src/a.clj" "a1")
     (put! dir "test/t.clj" "t1")
-    (put! dir ".gitignore" ".switchyard/\n")
-    (put! dir ".switchyard/main/lock" "pid")
+    (put! dir ".gitignore" ".switchfield/\n")
+    (put! dir ".switchfield/main/lock" "pid")
     (sh! dir "git" "add" ".")
     (sh! dir "git" "commit" "-qm" "init")
     dir))
@@ -51,10 +51,10 @@
         (put! dir "test/t.clj" "dirty-2")
         (is (not= (:tree dirty) (:tree (sut/snapshot dir))))
         (is (= ["test/t.clj"] (sut/changed-paths dir dirty (sut/snapshot dir))))))
-    (testing "ignored .switchyard/ is part of the snapshot"
+    (testing "ignored .switchfield/ is part of the snapshot"
       (let [before (sut/snapshot dir)]
-        (put! dir ".switchyard/main/lock" "tampered")
-        (is (= [".switchyard/main/lock"]
+        (put! dir ".switchfield/main/lock" "tampered")
+        (is (= [".switchfield/main/lock"]
                (sut/changed-paths dir before (sut/snapshot dir))))))
     (testing "a stat-only index refresh is not a change"
       (let [before (sut/snapshot dir)]
@@ -85,7 +85,7 @@
     (put! dir "deps.edn" "new")
     (put! dir "src/deep/new.clj" "n")
     (.delete (io/file dir "test/t.clj"))
-    (put! dir ".switchyard/main/lock" "tampered")
+    (put! dir ".switchfield/main/lock" "tampered")
     (sh! dir "git" "add" "src/a.clj")
     (sh! dir "git" "commit" "-qm" "sneaky")
     (sh! dir "git" "checkout" "-q" "-b" "other")
@@ -98,7 +98,7 @@
       (is (= "t1" (slurp (io/file dir "test/t.clj"))))
       (is (not (.exists (io/file dir "deps.edn"))))
       (is (not (.exists (io/file dir "src/deep"))) "empty parents are pruned")
-      (is (= "pid" (slurp (io/file dir ".switchyard/main/lock")))))))
+      (is (= "pid" (slurp (io/file dir ".switchfield/main/lock")))))))
 
 (deftest restore-handles-file-dir-swaps
   (let [dir (make-repo)
@@ -113,28 +113,28 @@
   (let [dir (make-repo)
         before (sut/snapshot dir)]
     (testing "reserved db/ state is never part of a snapshot"
-      (put! dir ".switchyard/main/db/data.mdb" "x")
+      (put! dir ".switchfield/main/db/data.mdb" "x")
       (is (= (:tree before) (:tree (sut/snapshot dir)))))
-    (testing "other state files still are, even though .switchyard/ is ignored"
-      (put! dir ".switchyard/main/runs/r.edn" "x")
+    (testing "other state files still are, even though .switchfield/ is ignored"
+      (put! dir ".switchfield/main/runs/r.edn" "x")
       (is (not= (:tree before) (:tree (sut/snapshot dir)))))
     (testing "run worktrees are never recorded, as gitlinks or otherwise"
       (let [s0 (sut/snapshot dir)]
-        (sut/worktree-add! dir (str dir "/.switchyard/worktrees/main-r1") "switchyard/main/r1")
-        (put! dir ".switchyard/worktrees/main-r1/src/x.clj" "x")
+        (sut/worktree-add! dir (str dir "/.switchfield/worktrees/main-r1") "switchfield/main/r1")
+        (put! dir ".switchfield/worktrees/main-r1/src/x.clj" "x")
         (is (= (:tree s0) (:tree (sut/snapshot dir))))))))
 
 (deftest watch-snapshots
   (let [dir (make-repo)
         w0 (sut/watch-snapshot dir "main")]
     (testing "a change to runner state moves :state only"
-      (put! dir ".switchyard/main/runs/r.edn" "x")
+      (put! dir ".switchfield/main/runs/r.edn" "x")
       (let [w1 (sut/watch-snapshot dir "main")]
         (is (not= (:state w0) (:state w1)))
         (is (= (:main w0) (:main w1)))))
     (testing "db/ under runner state is not watched"
       (let [w1 (sut/watch-snapshot dir "main")]
-        (put! dir ".switchyard/main/db/data.mdb" "x")
+        (put! dir ".switchfield/main/db/data.mdb" "x")
         (is (= w1 (sut/watch-snapshot dir "main")))))
     (testing "a change elsewhere in the main checkout moves :main only"
       (let [w1 (sut/watch-snapshot dir "main")]
@@ -146,9 +146,9 @@
       (is (string? (:state (sut/watch-snapshot dir "other")))))
     (testing "restore-tree! puts runner state back"
       (let [w1 (sut/watch-snapshot dir "main")]
-        (put! dir ".switchyard/main/runs/r.edn" "tampered")
+        (put! dir ".switchfield/main/runs/r.edn" "tampered")
         (sut/restore-tree! dir (:state w1) (:state (sut/watch-snapshot dir "main")))
-        (is (= "x" (slurp (io/file dir ".switchyard/main/runs/r.edn"))))))))
+        (is (= "x" (slurp (io/file dir ".switchfield/main/runs/r.edn"))))))))
 
 (deftest git-dir-hashes-detect-planted-hooks
   (let [dir (make-repo)
@@ -169,20 +169,20 @@
     (testing "a clean checkout, and files that are not tracked, are not dirty"
       (is (= [] (sut/dirty-paths dir)))
       (put! dir "untracked.txt" "x")
-      (put! dir ".switchyard/main/t.edn" "x")
+      (put! dir ".switchfield/main/t.edn" "x")
       (is (= [] (sut/dirty-paths dir))))
-    (testing "tracked changes are, .switchyard/ edits are not"
+    (testing "tracked changes are, .switchfield/ edits are not"
       (put! dir "src/a.clj" "changed")
       (is (= ["src/a.clj"] (sut/dirty-paths dir))))
     (testing "worktree creation, registration and branches"
-      (let [path (str dir "/.switchyard/worktrees/main-r1")]
+      (let [path (str dir "/.switchfield/worktrees/main-r1")]
         (is (not (sut/worktree-registered? dir path)))
-        (is (not (sut/branch-exists? dir "switchyard/main/r1")))
-        (sut/worktree-add! dir path "switchyard/main/r1")
+        (is (not (sut/branch-exists? dir "switchfield/main/r1")))
+        (sut/worktree-add! dir path "switchfield/main/r1")
         (is (sut/worktree-registered? dir path))
-        (is (sut/branch-exists? dir "switchyard/main/r1"))
+        (is (sut/branch-exists? dir "switchfield/main/r1"))
         (testing "it starts from HEAD: committed content, not dirty edits"
           (is (= "a1" (slurp (io/file path "src/a.clj")))))
         (testing "a plain directory is not a registered worktree"
-          (.mkdirs (io/file dir ".switchyard/worktrees/plain"))
-          (is (not (sut/worktree-registered? dir (str dir "/.switchyard/worktrees/plain")))))))))
+          (.mkdirs (io/file dir ".switchfield/worktrees/plain"))
+          (is (not (sut/worktree-registered? dir (str dir "/.switchfield/worktrees/plain")))))))))

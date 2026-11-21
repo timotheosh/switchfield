@@ -98,12 +98,12 @@
 ;; -- Worktree -----------------------------------------------------------
 
 (def ^:private state-ignore-lines
-  "The volatile parts of .switchyard/ (it is otherwise tracked, so the
+  "The volatile parts of .switchfield/ (it is otherwise tracked, so the
   timetable can be committed): run worktrees, locks and the reserved db/."
   ["worktrees/" "*/lock" "*/db/"])
 
 (defn- worktree-path [root eb run-id]
-  (str root "/.switchyard/" pipeline/worktrees-dir "/" (pipeline/worktree-name eb run-id)))
+  (str root "/.switchfield/" pipeline/worktrees-dir "/" (pipeline/worktree-name eb run-id)))
 
 (defn- worktree-facts
   "What exists for a run's worktree, as data for the problem check."
@@ -113,13 +113,13 @@
      :dir-exists?    (.exists (io/file path))
      :branch-exists? (git/branch-exists? root (pipeline/worktree-branch eb run-id))
      :ref-conflicts  (vec (filter #(git/branch-exists? root %)
-                                  ["switchyard" (str "switchyard/" eb)]))}))
+                                  ["switchfield" (str "switchfield/" eb)]))}))
 
 (defn ensure-state-gitignore!
-  "Make sure .switchyard/.gitignore ignores the volatile state, keeping any
+  "Make sure .switchfield/.gitignore ignores the volatile state, keeping any
   lines already there."
   [root]
-  (let [f        (io/file root ".switchyard" ".gitignore")
+  (let [f        (io/file root ".switchfield" ".gitignore")
         existing (if (.exists f) (str/split-lines (slurp f)) [])
         missing  (remove (set existing) state-ignore-lines)]
     (when (seq missing)
@@ -155,7 +155,7 @@
     (when (and (Files/exists path no-follow)
                (not (Files/isRegularFile path no-follow)))
       (throw (IOException. (str "Not a regular profile file: " path))))
-    (let [temp (Files/createTempFile dir ".switchyard-" ".tmp" attributes)]
+    (let [temp (Files/createTempFile dir ".switchfield-" ".tmp" attributes)]
       (try
         (Files/writeString temp contents (make-array OpenOption 0))
         (Files/move temp path (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
