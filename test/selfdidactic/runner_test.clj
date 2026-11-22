@@ -8,6 +8,7 @@
             [selfdidactic.harness :as harness]
             [selfdidactic.pipeline :as pipeline]
             [selfdidactic.runner :as sut]
+            [selfdidactic.state :as state]
             [selfdidactic.timetable :as tt])
   (:import [java.net InetAddress]))
 
@@ -371,26 +372,8 @@
         (gt/put! (:root env) "untracked.txt" "x")
         (is (= :success (:status (wt-run env agents [step-impl]))))))))
 
-(deftest run-id-reuses-the-previous-worktree
-  (let [env (setup!)
-        r1  (wt-run env {:impl (script-agent "cat >/dev/null; echo one >> src/log")} [step-impl])
-        r2  (wt-run env {:impl (script-agent "cat >/dev/null; echo two >> src/log")} [step-impl])]
-    (is (= :success (:status r1)))
-    (is (= :success (:status r2)))
-    (is (= "one\ntwo\n" (slurp (io/file (wt-path env "r1") "src/log"))))
-    (is (= (:path (:worktree r1)) (:path (:worktree r2))))
-    (is (true? (:reused? (:worktree r2))))
-    (testing "one record file; the second invocation appends a resumed header"
-      (is (= (:record r1) (:record r2)))
-      (let [es (entries r2)]
-        (is (= [:header :attempt :terminal :header :attempt :terminal] (map :entry es)))
-        (is (true? (:resumed? (nth es 3))))
-        (is (nil? (:resumed? (first es))))))))
-
 (deftest worktree-setup-problems
   (let [agents {:impl (script-agent "cat >/dev/null; true")}]
-    (testing "an unusable run id"
-      (is (= [:invalid-run-id] (problem-kinds (wt-run (setup!) agents [step-impl] {:run-id "bad/id"})))))
     (testing "a branch that would collide with the worktrees directory"
       (is (some #{:reserved-branch-name}
                 (problem-kinds (wt-run (setup!) agents [step-impl] {:branch "worktrees"})))))
@@ -453,9 +436,9 @@
 (deftest reserved-db-state-is-never-snapshotted-or-rolled-back
   (doseq [[label run script]
           [["worktree" wt-run (str "cat >/dev/null; mkdir -p ../../main/db; "
-                                   "echo x > ../../main/db/data.mdb; echo y > deps.edn")]
+                                   "echo x > ../../main/db/scratch.txt; echo y > deps.edn")]
            ["in place" run-it! (str "cat >/dev/null; mkdir -p .switchfield/main/db; "
-                                    "echo x > .switchfield/main/db/data.mdb; echo y > deps.edn")]]]
+                                    "echo x > .switchfield/main/db/scratch.txt; echo y > deps.edn")]]]
     (testing label
       (let [env (setup!)
             r   (run env {:impl (script-agent script :max-violation-retries 0)} [step-impl])]
@@ -464,7 +447,7 @@
           (is (= [{:violation :out-of-jurisdiction :path "deps.edn"}]
                  (:violations (first (attempts r))))))
         (testing "the rollback left db/ alone"
-          (is (= "x\n" (slurp (io/file (:dir env) "db/data.mdb")))))))))
+          (is (= "x\n" (slurp (io/file (:dir env) "db/scratch.txt")))))))))
 
 (deftest an-in-place-run-ignores-earlier-run-worktrees
   (let [env (setup!)]
@@ -656,3 +639,141 @@
       (is (= [[{:violation :out-of-jurisdiction :path "src/x.clj"}]
               [{:violation :out-of-jurisdiction :path "src/x.clj"}]]
              (map :violations (attempts r)))))))
+
+;; -- Resume -----------------------------------------------------------------
+;; Datalevin owns execution state, git owns the work products: an unfinished run
+;; is resumed after its state has been checked against the worktree.
+
+(def three-steps [{:agent :a :prompt :p} {:agent :b :prompt :p} {:agent :c :prompt :p}])
+
+(defn- three-agents
+  "Stages a and b write a file each; c runs `c-script`."
+  [c-script]
+  {:a (script-agent "cat >/dev/null; echo a > a/file" :writes ["a/"])
+   :b (script-agent "cat >/dev/null; echo b > b/file" :writes ["b/"])
+   :c (script-agent c-script :writes ["c/"])})
+
+(def fails-at-c "cat >/dev/null; echo partial > c/file; exit 3")
+(def passes-at-c "cat >/dev/null; echo c > c/file")
+
+(defn- latest-invocation
+  "The entries the most recent invocation appended to the run record."
+  [r]
+  (->> (entries r) reverse (take-while #(not= :header (:entry %))) reverse
+       (cons (last (filter #(= :header (:entry %)) (entries r))))))
+
+(defn- dispatched
+  "The step indexes the most recent invocation dispatched."
+  [r]
+  (->> (latest-invocation r) (filter #(= :attempt (:entry %))) (map :step) distinct))
+
+(defn- resume-run [env agents & [extra]]
+  (run-it! env agents three-steps (merge {:worktree? true} extra)))
+
+(deftest resume-continues-at-the-first-incomplete-stage
+  (let [env (setup!)
+        r1  (resume-run env (three-agents fails-at-c))
+        first-dispatched (dispatched r1)
+        r2  (resume-run env (three-agents passes-at-c))
+        wt  (:path (:worktree r2))]
+    (testing "given a run interrupted after two completed stages"
+      (is (= :step-failed (:status r1)))
+      (is (= [0 1 2] first-dispatched)))
+    (testing "when resumed, neither completed stage is redispatched"
+      (is (= :success (:status r2)))
+      (is (= [2] (dispatched r2))))
+    (testing "the same run and worktree carry on, and the header says what was skipped"
+      (is (= (:path (:worktree r1)) wt))
+      (is (= (:record r1) (:record r2)))
+      (is (= {:resumed? true :skipped-stages [0 1]}
+             (select-keys (first (latest-invocation r2)) [:resumed? :skipped-stages]))))
+    (testing "the work products are the completed stages' plus the resumed stage's"
+      (is (= ["a\n" "b\n" "c\n"] (map #(slurp (io/file wt % "file")) ["a" "b" "c"]))))))
+
+(defn- file-in [r dir] (io/file (:path (:worktree r)) dir "file"))
+
+(deftest resume-rolls-the-work-dir-back-to-the-last-kept-stage
+  (let [env (setup!)
+        r1  (resume-run env (three-agents fails-at-c))
+        _   (is (= "partial\n" (slurp (file-in r1 "c"))) "the failed stage left partial edits")
+        r2  (resume-run env (three-agents "cat >/dev/null; test ! -e c/file && echo clean > c/done"))]
+    (is (= :success (:status r2)))
+    (is (= "clean\n" (slurp (io/file (:path (:worktree r2)) "c/done"))) "stage c saw the tree as stage b left it")
+    (is (= "a\n" (slurp (file-in r2 "a"))))))
+
+(deftest resume-redispatches-a-stage-whose-output-was-touched-or-inputs-changed
+  (testing "a changed agent definition re-runs that stage and the ones after it"
+    (let [env (setup!)
+          _   (resume-run env (three-agents fails-at-c))
+          r2  (resume-run env (assoc (three-agents passes-at-c)
+                                     :b (script-agent "cat >/dev/null; echo b2 > b/file" :writes ["b/"])))]
+      (is (= :success (:status r2)))
+      (is (= [1 2] (dispatched r2)))
+      (is (= [0] (:skipped-stages (first (latest-invocation r2)))))
+      (is (= "b2\n" (slurp (file-in r2 "b"))))))
+  (testing "a changed prompt re-runs everything"
+    (let [env (setup!)
+          _   (resume-run env (three-agents fails-at-c))
+          _   (gt/put! (:root env) ".switchfield/main/p.md" "NEW PROMPT")
+          r2  (resume-run env (three-agents passes-at-c))]
+      (is (= [0 1 2] (dispatched r2)))
+      (is (= [] (:skipped-stages (first (latest-invocation r2))))))))
+
+(deftest a-successful-run-is-not-resumed
+  (let [env (setup!)
+        r1  (resume-run env (three-agents passes-at-c))
+        r2  (resume-run env (three-agents passes-at-c))]
+    (is (= :success (:status r1)))
+    (is (= :success (:status r2)))
+    (is (not= (:path (:worktree r1)) (:path (:worktree r2))))
+    (is (not (:resumed? (first (latest-invocation r2)))))))
+
+(deftest a-crash-between-a-finished-stage-and-its-commit-loses-neither-fact
+  (let [env   (setup!)
+        calls (atom 0)
+        real  state/record-stage!]
+    (with-redefs [state/record-stage! (fn [& args]
+                                        (if (= 2 (swap! calls inc))
+                                          (throw (ex-info "crash" {}))
+                                          (apply real args)))]
+      (is (thrown? clojure.lang.ExceptionInfo (resume-run env (three-agents passes-at-c)))))
+    (let [saved (state/unfinished-run (:dir env))]
+      (is (= [0] (map :group (:stages saved))) "only the committed stage is recorded")
+      (is (= 1 (:g (:cursor saved))) "and the cursor is exactly past it"))
+    (let [r (resume-run env (three-agents passes-at-c))]
+      (is (= :success (:status r)))
+      (is (= [1 2] (dispatched r))))))
+
+(deftest restart-starts-over-cleans-the-work-dir-and-keeps-the-history
+  (let [env (setup!)
+        r1  (resume-run env (three-agents fails-at-c))
+        _   (gt/put! (:root env) "keep-me.txt" "main checkout")
+        _   (spit (io/file (:path (:worktree r1)) "untracked.txt") "mine")
+        r2  (resume-run env (three-agents passes-at-c) {:restart? true})]
+    (is (= :success (:status r2)))
+    (testing "every stage runs again, in the same worktree"
+      (is (= [0 1 2] (dispatched r2)))
+      (is (= (:path (:worktree r1)) (:path (:worktree r2)))))
+    (testing "uncommitted work in the pipeline's work dir is gone; the main checkout is untouched"
+      (is (not (.exists (io/file (:path (:worktree r2)) "untracked.txt"))))
+      (is (= "main checkout" (slurp (io/file (:root env) "keep-me.txt")))))
+    (testing "the header says so, and the earlier run's history is still in Datalevin"
+      (is (= {:restarted? true :generation 1}
+             (select-keys (first (latest-invocation r2)) [:restarted? :generation])))
+      (is (= [[0 :superseded 2] [1 :success 3]]
+             (map (juxt :generation :status (comp count :stages)) (state/runs (:dir env))))))))
+
+(deftest restart-without-an-unfinished-run-is-an-ordinary-run
+  (let [env (setup!)
+        r   (resume-run env (three-agents passes-at-c) {:restart? true})]
+    (is (= :success (:status r)))
+    (is (= [0 1 2] (dispatched r)))
+    (is (not (:restarted? (first (latest-invocation r)))))))
+
+(deftest an-unfinished-run-of-the-other-mode-must-be-restarted
+  (let [env (setup!)
+        _   (resume-run env (three-agents fails-at-c))
+        r   (run-it! env (three-agents passes-at-c) three-steps {:worktree? false})]
+    (is (= [:run-mode-mismatch] (problem-kinds r)))
+    (is (= :success (:status (run-it! env (three-agents passes-at-c) three-steps
+                                      {:worktree? false :restart? true}))))))

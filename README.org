@@ -69,7 +69,7 @@ switchfield 0.1.0-SNAPSHOT
     --existing MODE    with --generate-agents: overwrite (default), skip, or ask about each existing agent file
     --force-unlock     clear a stale run lock before running
     --[no-]worktree    run in a new git worktree (the default), or in place
-    --run-id ID        name the run; re-use that run's worktree if it exists
+    --restart          DESTRUCTIVE: discard the unfinished run's progress and the uncommitted work in its working tree, and start over from the first step (history is kept)
     --allow-dirty      start although the checkout has uncommitted changes
     --headless         no progress line on the terminal (log output is unchanged)
 #+end_example
@@ -112,7 +112,7 @@ they are merged on top of the shared ones (same rules as below), so a branch
 overrides only the keys it names. Prompt and skill paths are looked up in the
 branch directory first, then in =.switchfield/=. =selfdidactic.timetable/load-dirs=
 does the layered load. The branch directory also holds that branch's run state
-(=lock=, =runs/=, =logs/=, =db/=), and is created on the first run if it does not exist.
+(=lock=, =runs/=, =logs/=, =db/=, the Datalevin database of execution state), and is created on the first run if it does not exist.
 
 *** Merging
 Fragments are merged recursively. When both values are maps they merge;
@@ -304,13 +304,51 @@ of time.
 
 Note that a normal run still refreshes its own profile before each launch.
 
+*** Resuming and restarting a run
+Datalevin owns execution state; git owns the work products. Each branch keeps
+a Datalevin database in =.switchfield/<branch>/db/= with every run, the stages
+it completed, a fingerprint of what each stage depended on, and the git tree
+each stage left behind. A stage's completion and the run's position are
+committed in one transaction, so a crash never leaves them disagreeing.
+
+There is no run id to pass. The branch's latest run that did not succeed
+(interrupted, or ended in exit 3, 4 or 5) is the /unfinished run/, and running
+the pipeline again resumes it. Before dispatching anything, switchfield
+reconciles the saved state with the work dir:
+
+- A completed stage is skipped only if its fingerprint (its steps, agents,
+  harnesses, prompt texts and the specification) is unchanged /and/ the tree it
+  left behind still exists in git. The first stage that fails either test is
+  run again, together with every stage after it.
+- The work dir is then reset to the output of the last stage that was kept,
+  removing the partial work of whatever was interrupted (only the work dir is
+  touched; refs, HEAD, the index and the main checkout are not).
+- A run that used a worktree must be resumed with a worktree, and one that ran
+  in place in place (=--[no-]worktree=); otherwise it is a problem.
+
+The run record's header says =:resumed? true= and lists =:skipped-stages=.
+Git drops unreachable objects after about two weeks (=gc.pruneExpire=); a saved
+stage whose tree is gone is simply run again, and a run whose baseline is gone
+reports =:saved-state-lost= and needs =--restart=.
+
+#+begin_warning
+=--restart= is destructive. It discards the unfinished run's progress and
+resets its working tree to the state the run started from: every uncommitted
+and untracked change there is deleted, including the work of stages that had
+already completed, and every stage (and agent) runs again. Commit or copy
+anything you want to keep first; with =--no-worktree= that working tree is
+your project root. Execution history in Datalevin and the run records are kept
+(the old run is marked superseded); the main checkout is not touched in
+worktree mode. Without an unfinished run it does nothing special.
+#+end_warning
+
 *** Run worktrees
 By default each run happens in its own git worktree, so agents never touch
 your checkout:
 
 - The worktree is =<repo root>/.switchfield/worktrees/<branch>-<run-id>= (the
   branch is encoded as above), on a new branch =switchfield/<branch>/<run-id>=
-  started from =HEAD=. The run id is generated, or given with =--run-id=.
+  started from =HEAD=. The run id is generated.
 - Agents run with the worktree as their directory; every snapshot, check and
   rollback above happens there. The timetable, lock and run record stay in
   the main checkout's =.switchfield/= (run state in =.switchfield/<branch>/=) and
@@ -318,10 +356,9 @@ your checkout:
 - Nothing is committed or removed. The run prints =worktree: <path>= (on
   failure, with the failure message); review, commit and merge from there, and
   clean up with =git worktree remove <path>=.
-- =--run-id ID= re-uses that run's worktree when it exists (the pipeline starts
-  again from its first step inside it; the worktree keeps the =HEAD= of the
-  original run, so it does not pick up newer commits). Otherwise it creates
-  one with that id.
+- An unfinished run's worktree is re-used when the run is resumed or
+  restarted (see [[*Resuming and restarting a run][Resuming and restarting a run]]); it keeps the =HEAD= of
+  the original run, so it does not pick up newer commits.
 - Because the worktree is built from =HEAD=, agents do not see your
   uncommitted changes (nor untracked files). A checkout with uncommitted
   changes to tracked files is therefore a problem, listing them; =--allow-dirty=

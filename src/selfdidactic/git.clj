@@ -178,6 +178,23 @@
   (restore-worktree! dir {:tree before-tree}
                      (changed-paths dir {:tree before-tree} {:tree after-tree})))
 
+(defn tree-exists?
+  "Whether the tree object still exists in dir's repository."
+  [dir tree]
+  (some? (git-line-or-nil dir "rev-parse" "--verify" "-q" (str tree "^{tree}"))))
+
+(defn reset-to-tree!
+  "Make the files of work dir `dir` identical to `tree`, touching only the
+  paths that differ (never refs, HEAD or the index). Throws if it cannot."
+  [dir tree]
+  (let [now (:tree (snapshot dir))]
+    (when (not= tree now)
+      (restore-tree! dir tree now)
+      (let [after (:tree (snapshot dir))]
+        (when (not= tree after)
+          (throw (ex-info "Reset did not reproduce the recorded tree"
+                          {:kind :reset-failed :expected tree :actual after})))))))
+
 (defn- sha256-file [^File f]
   (apply str (map #(format "%02x" %)
                   (.digest (java.security.MessageDigest/getInstance "SHA-256")

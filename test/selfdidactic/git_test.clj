@@ -190,3 +190,20 @@
         (testing "a plain directory is not a registered worktree"
           (.mkdirs (io/file dir ".switchfield/worktrees/plain"))
           (is (not (sut/worktree-registered? dir (str dir "/.switchfield/worktrees/plain")))))))))
+
+(deftest reset-to-tree-touches-only-the-work-dir-files-that-differ
+  (let [dir    (make-repo)
+        target (:tree (sut/snapshot dir))
+        refs   (:refs (sut/snapshot dir))]
+    (put! dir "src/a.clj" "changed")
+    (put! dir "src/untracked.clj" "new")
+    (sut/reset-to-tree! dir target)
+    (is (= target (:tree (sut/snapshot dir))))
+    (is (= "a1" (slurp (io/file dir "src/a.clj"))))
+    (is (not (.exists (io/file dir "src/untracked.clj"))))
+    (is (= refs (:refs (sut/snapshot dir))) "refs are never rewritten")))
+
+(deftest tree-exists-tells-a-real-tree-from-a-lost-one
+  (let [dir (make-repo)]
+    (is (sut/tree-exists? dir (:tree (sut/snapshot dir))))
+    (is (not (sut/tree-exists? dir "0123456789012345678901234567890123456789")))))

@@ -9,7 +9,8 @@
             [selfdidactic.harness :as harness]
             [selfdidactic.pipeline :as pipeline]
             [selfdidactic.plugins :as plugins]
-            [selfdidactic.progress :as progress])
+            [selfdidactic.progress :as progress]
+            [selfdidactic.state :as state])
   (:import [java.io File IOException]
            [java.net InetAddress]
            [java.nio.file CopyOption FileAlreadyExistsException Files LinkOption
@@ -189,8 +190,8 @@
 (defn- write-step-log!
   "Save a step's full captured output under the branch's logs/ directory,
   which the checks never look at; its path."
-  [dir run-id i text]
-  (let [f (io/file dir "logs" run-id (str "step-" i ".log"))]
+  [dir log-id i text]
+  (let [f (io/file dir "logs" log-id (str "step-" i ".log"))]
     (io/make-parents f)
     (spit f text)
     (str f)))
@@ -248,7 +249,7 @@
   share one snapshot pair: a change cannot be attributed to one of them, so
   each is held to its own :writes and all are rolled back together. Returns
   the entries, in member order."
-  [{:keys [root dir run-id work-dir eb writes worktree?] :as ctx} members n contexts record]
+  [{:keys [root dir log-id work-dir eb writes worktree?] :as ctx} members n contexts record]
   (let [plans   (mapv #(prepare-member! ctx %1 %2) members contexts)
         watch   #(when worktree? (git/watch-snapshot root eb))
         before  (git/snapshot work-dir)
@@ -296,7 +297,7 @@
                            :recreated-dirs recreated
                            :missing-artifact missing-artifact
                            :log (when (and capture (not launch-error))
-                                  (write-step-log! dir run-id i (pipeline/capture-text capture run)))
+                                  (write-step-log! dir log-id i (pipeline/capture-text capture run)))
                            :verdict (pipeline/step-verdict step (assoc run :missing-artifact missing-artifact) parsed)
                            :violations violations
                            :restored? retryable?
@@ -379,22 +380,62 @@
       entry)))
 
 (defn- finish!
-  [record status steps step-index worktree]
+  "Record how the run ended in Datalevin, then in the run record."
+  [{:keys [dir eid]} record status steps step-index worktree]
+  (state/finish-run! dir eid status)
   (append! record (cond-> {:entry :terminal :status status :step step-index}
                     worktree (assoc :worktree worktree)))
   (cond-> {:status status :step step-index :steps steps :record (str record)}
     worktree (assoc :worktree worktree)))
 
+(defn- complete-stage!
+  "Commit a finished stage and the cursor that moves past it in one
+  transaction, before anything else is written about it."
+  [{:keys [dir eid fingerprints]} g entering entry cursor]
+  (state/record-stage! dir eid
+                       {:group g :fingerprint (get fingerprints g) :entering entering
+                        :after-tree (get-in entry [:after :tree])}
+                       cursor))
+
+(defn- begin-state!
+  "Open this invocation's run in Datalevin: the saved run when resuming, else a
+  new one (a restart supersedes the saved run, keeping its history). Returns
+  the entity id."
+  [{:keys [dir run-id worktree? saved saved-run restart? generation]} baseline-tree]
+  (if (and saved (not restart?))
+    (:eid saved)
+    (let [eid (state/begin-run! dir {:run-id run-id :generation generation
+                                     :worktree? worktree? :baseline-tree baseline-tree})]
+      (when saved-run (state/finish-run! dir (:eid saved-run) :superseded))
+      eid)))
+
+(defn- reconcile!
+  "Make the work dir match what the saved state says it should be before
+  anything is dispatched: the last kept stage's output when resuming, the
+  run's baseline when restarting. Scoped to the work dir."
+  [{:keys [saved plan restart? run-id]} work-dir]
+  (cond
+    plan
+    (git/reset-to-tree! work-dir (:restore-to plan))
+
+    (and saved restart? (= run-id (:run-id saved)))
+    (git/reset-to-tree! work-dir (:baseline-tree saved))))
+
 (defn- execute!
-  [{:keys [dir root timetable pipeline-name spec writes run-id worktree?] :as ctx}]
+  [{:keys [dir root timetable pipeline-name spec writes run-id worktree? plan saved restart?
+           generation]
+    :as ctx}]
   (let [wt       (when worktree? (setup-worktree! ctx))
         _        (when wt (ensure-state-gitignore! root))
         work-dir (if wt (:path wt) root)
         ctx      (assoc ctx :work-dir work-dir)
+        _        (reconcile! ctx work-dir)
         created  (ensure-dirs! work-dir writes)
+        ctx      (assoc ctx :eid (begin-state! ctx (:tree (git/snapshot work-dir))))
         record   (io/file dir "runs" (str run-id ".edn"))
         steps    (get-in timetable [:pipelines pipeline-name :steps])
-        groups   (pipeline/step-groups steps)]
+        groups   (pipeline/step-groups steps)
+        start    (if plan (:state plan) {:g 0 :redirects {} :context {}})]
     (io/make-parents record)
     (append! record (cond-> {:entry :header :pipeline pipeline-name
                              :writes writes :created-dirs created
@@ -402,47 +443,92 @@
                              :spec-sha256 (sha256 (:contents spec))
                              :timetable-sha256 (sha256 (pr-str (pipeline/canonical timetable)))}
                       wt (assoc :worktree wt)
-                      (:reused? wt) (assoc :resumed? true)))
-    (loop [g 0 done [] redirects {} context {}]
+                      plan (assoc :resumed? true :skipped-stages (:kept plan))
+                      (and saved restart? (= run-id (:run-id saved)))
+                      (assoc :restarted? true :generation generation)))
+    (loop [g (:g start) done [] redirects (:redirects start) context (:context start)]
       (if (= g (count groups))
-        (finish! record :success done nil wt)
-        (let [members (mapv #(vector % (nth steps %)) (nth groups g))
-              entry   (run-stage! ctx members record (count steps) context)
-              done    (conj done entry)
-              i       (:step entry)
-              step    (nth steps i)]
+        (finish! ctx record :success done nil wt)
+        (let [members  (mapv #(vector % (nth steps %)) (nth groups g))
+              entering {:g g :redirects redirects :context context}
+              entry    (run-stage! ctx members record (count steps) context)
+              done     (conj done entry)
+              i        (:step entry)
+              step     (nth steps i)]
           (case (:step-status entry)
-            :ok (recur (inc g) done redirects {})
+            :ok (do (complete-stage! ctx g entering entry
+                                     {:g (inc g) :redirects redirects :context {}})
+                    (recur (inc g) done redirects {}))
             :redirect
             (let [used   (get redirects i 0)
                   target (pipeline/redirect-target steps i step)]
               (if (>= used (pipeline/redirect-max step))
-                (finish! record :review-failed done i wt)
-                (do (append! record {:entry :redirect :from i :to target :count (inc used)})
-                    (recur (pipeline/group-index groups target) done (assoc redirects i (inc used))
-                           {:verdict (:verdict entry) :from (pipeline/step-label step)}))))
-            (finish! record (:step-status entry) done i wt)))))))
+                (finish! ctx record :review-failed done i wt)
+                (let [redirects (assoc redirects i (inc used))
+                      context   {:verdict (:verdict entry) :from (pipeline/step-label step)}
+                      next-g    (pipeline/group-index groups target)]
+                  (complete-stage! ctx g entering entry
+                                   {:g next-g :redirects redirects :context context})
+                  (append! record {:entry :redirect :from i :to target :count (inc used)})
+                  (recur next-g done redirects context))))
+            (finish! ctx record (:step-status entry) done i wt)))))))
+
+(defn- stage-fingerprints
+  "Calculate {group hash}: what each group's saved result depends on right now."
+  [{:keys [timetable pipeline-name spec prompt-texts]}]
+  (let [steps  (get-in timetable [:pipelines pipeline-name :steps])
+        inputs {:timetable timetable :prompt-texts prompt-texts
+                :spec-sha256 (sha256 (:contents spec))}]
+    (into {} (map-indexed (fn [g indexes]
+                            [g (sha256 (pr-str (pipeline/stage-fingerprint inputs steps indexes)))]))
+          (pipeline/step-groups steps))))
+
+(defn- reconcile-inputs
+  "What git still has of a saved run's trees, next to what each group's
+  fingerprint is now."
+  [root ctx saved]
+  {:fingerprints (stage-fingerprints ctx)
+   :existing-trees (set (filter #(git/tree-exists? root %)
+                                (cons (:baseline-tree saved) (map :after-tree (:stages saved)))))})
 
 (defn run-pipeline!
-  "Run the named pipeline sequentially. ctx: :config :timetable
+  "Run the named pipeline sequentially, or continue its branch's unfinished run
+  (any run that did not succeed) after checking its saved state against the
+  work dir; :restart? starts over from the first step instead, cleaning the
+  run's work dir and keeping the history. ctx: :config :timetable
   :pipeline-name :spec {:path :contents} :root (repo top level) :branch
   :dir (the branch's state directory), :timetable-dirs (where prompt files
-  are read from, lowest precedence first; defaults to [dir]) :force-unlock?, and for worktree
-  runs :worktree? :run-id (optional; generated when absent) :allow-dirty?.
+  are read from, lowest precedence first; defaults to [dir]) :force-unlock?
+  :restart?, and for worktree runs :worktree? :allow-dirty?. A new run's id is
+  generated, or taken from :run-id.
   Returns {:status :success|:step-failed|:violations ...} or
   {:status :problems :problems [...]} before anything has run."
   [{:keys [dir root branch timetable pipeline-name force-unlock?] :as ctx}]
   (let [writes   (pipeline/writes-list timetable pipeline-name)
-        run-id   (or (:run-id ctx) (generate-run-id))
+        saved    (when dir (state/unfinished-run dir))
+        restart? (boolean (:restart? ctx))
+        adopt?   (boolean (and saved (or (not restart?)
+                                         (= (boolean (:worktree? ctx)) (boolean (:worktree? saved))))))
+        run-id   (if adopt? (:run-id saved) (or (:run-id ctx) (generate-run-id)))
         eb       (when branch (pipeline/encode-branch branch))
-        probe?   (and (:worktree? ctx) root eb (pipeline/valid-run-id? run-id))
+        probe?   (and (:worktree? ctx) root eb)
         ctx      (assoc ctx
-                        :writes writes :run-id run-id :eb eb
+                        :writes writes :run-id run-id :eb eb :restart? restart?
+                        :saved-run saved
+                        :saved (when adopt? saved)
+                        :generation (if (and adopt? restart?) (inc (:generation saved)) 0)
+                        :log-id (if (and adopt? restart?)
+                                  (str run-id "-g" (inc (:generation saved)))
+                                  run-id)
                         :writes-fs (if root (inspect-writes root writes) {})
                         :prompt-texts (if dir (read-prompts (or (:timetable-dirs ctx) [dir]) timetable pipeline-name) {})
                         :dirty-paths (when probe? (git/dirty-paths root))
                         :worktree-facts (when probe? (worktree-facts root eb run-id)))
-        problems (pipeline/pipeline-problems ctx)]
+        ctx      (assoc ctx :fingerprints (stage-fingerprints ctx))
+        plan     (when (and adopt? (not restart?))
+                   (pipeline/resume-plan saved (reconcile-inputs root ctx saved)))
+        ctx      (assoc ctx :plan plan)
+        problems (pipeline/pipeline-problems (assoc ctx :resume-plan (:plan ctx)))]
     (if (seq problems)
       {:status :problems :problems problems}
       (let [{:keys [lock problem]} (acquire-lock! dir force-unlock?)]
