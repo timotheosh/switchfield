@@ -22,7 +22,7 @@
        "      --existing MODE    with --generate-agents: overwrite (default), skip, or ask about each existing agent file\n"
        "      --force-unlock     clear a stale run lock before running\n"
        "      --[no-]worktree    run in a new git worktree (the default), or in place\n"
-       "      --run-id ID        name the run; re-use that run's worktree if it exists\n"
+       "      --restart          DESTRUCTIVE: discard the unfinished run's progress and the uncommitted work in its working tree, and start over from the first step (history is kept)\n"
        "      --allow-dirty      start although the checkout has uncommitted changes\n"
        "      --headless         no progress line on the terminal (log output is unchanged)\n"))
 
@@ -289,7 +289,7 @@
   (testing "a complete config with --pipeline resolves to :run-pipeline"
     (let [command (sut/parse-command ["--pipeline" "dev"])]
       (is (= {:kind :run-pipeline :config {:spec "s.md"} :pipeline-name :dev
-              :force-unlock? false :worktree? true :run-id nil :allow-dirty? false :headless? false}
+              :force-unlock? false :worktree? true :restart? false :allow-dirty? false :headless? false}
              (sut/resolve-command command {:spec "s.md"})))))
   (testing "--pipeline still needs the required config"
     (is (= :usage-error
@@ -343,10 +343,13 @@
       (is (= :usage-error (:kind (sut/parse-command ["--existing" "bogus"])))))
     (testing "--headless is carried through"
       (is (true? (:headless? (resolve ["--pipeline" "dev" "--headless"] {:spec "s.md"})))))
-    (testing "--run-id and --allow-dirty are carried through"
-      (let [c (resolve ["--pipeline" "dev" "--run-id" "r7" "--allow-dirty"] {:spec "s.md"})]
-        (is (= "r7" (:run-id c)))
-        (is (true? (:allow-dirty? c)))))
+    (testing "--restart and --allow-dirty are carried through"
+      (let [c (resolve ["--pipeline" "dev" "--restart" "--allow-dirty"] {:spec "s.md"})]
+        (is (true? (:restart? c)))
+        (is (true? (:allow-dirty? c))))
+      (is (false? (:restart? (resolve ["--pipeline" "dev"] {:spec "s.md"})))))
+    (testing "--run-id no longer exists: an unfinished run is simply resumed"
+      (is (= :usage-error (:kind (sut/parse-command ["--run-id" "r7"])))))
     (testing "a config value that is not a boolean is a config error"
       (is (= :config-error
              (:kind (resolve ["--pipeline" "dev"] {:spec "s.md" :worktree "yes"})))))))

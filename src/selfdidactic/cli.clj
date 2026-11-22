@@ -52,7 +52,7 @@
     :validate [#{"overwrite" "skip" "ask"} "must be overwrite, skip or ask"]]
    [nil "--force-unlock" "clear a stale run lock before running"]
    [nil "--[no-]worktree" "run in a new git worktree (the default), or in place"]
-   [nil "--run-id ID" "name the run; re-use that run's worktree if it exists"]
+   [nil "--restart" "DESTRUCTIVE: discard the unfinished run's progress and the uncommitted work in its working tree, and start over from the first step (history is kept)"]
    [nil "--allow-dirty" "start although the checkout has uncommitted changes"]
    [nil "--headless" "no progress line on the terminal (log output is unchanged)"]])
 
@@ -132,7 +132,7 @@
        :generate-agents? (boolean (:generate-agents options))
        :existing (or (:existing options) "overwrite")
        :worktree (:worktree options)
-       :run-id (:run-id options)
+       :restart? (boolean (:restart options))
        :allow-dirty? (boolean (:allow-dirty options))
        :headless? (boolean (:headless options))
        :overrides (if (seq spec-paths) {:spec (first spec-paths)} {})})))
@@ -141,7 +141,7 @@
   "Calculate what to do from a parsed :run command and the file config.
   First matching row wins, top to bottom."
   [{:keys [usage no-args? validate? config-path overrides pipeline force-unlock?
-           worktree run-id allow-dirty? headless? generate-agents? existing]}
+           worktree restart? allow-dirty? headless? generate-agents? existing]}
    file-config]
   (let [config (config/merge-overrides file-config overrides)
         missing (config/missing-keys config/required-keys config)
@@ -179,7 +179,7 @@
        :force-unlock? force-unlock?
        ;; The flag wins over the config file; a worktree is the default.
        :worktree? (if (some? worktree) worktree (get config :worktree true))
-       :run-id run-id :allow-dirty? allow-dirty? :headless? headless?}
+       :restart? restart? :allow-dirty? allow-dirty? :headless? headless?}
 
       ;; Complete config without --pipeline: describe what would run.
       :else
@@ -294,7 +294,7 @@
 
 (defn- run-pipeline!
   "Load the branch's timetable and the specification, then run the pipeline."
-  [{:keys [config pipeline-name force-unlock? worktree? run-id allow-dirty? headless?]}]
+  [{:keys [config pipeline-name force-unlock? worktree? restart? allow-dirty? headless?]}]
   (let [root   (git/toplevel ".")
         branch (git/branch root)]
     (if-not branch
@@ -310,7 +310,7 @@
           :spec (load-specification! (:spec config))
           :root root :branch branch :dir dir
           :force-unlock? force-unlock?
-          :worktree? worktree? :run-id run-id :allow-dirty? allow-dirty?
+          :worktree? worktree? :restart? restart? :allow-dirty? allow-dirty?
           :progress (progress-display headless?)})))))
 
 (defn- run-pipeline-response!

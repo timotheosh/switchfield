@@ -185,8 +185,6 @@
          (problem-kinds (assoc ctx :writes-fs {"src/" :file "test/" :dir})))))
 
 (deftest run-id-and-worktree-naming
-  (is (every? sut/valid-run-id? ["r1" "20261013T170516Z-ab12cd" "a.b_c-d"]))
-  (is (not-any? sut/valid-run-id? [nil "" "a/b" "../x" ".hidden" "-x" "a b" "r1\n"]))
   (is (= "feat%2Fx-r1" (sut/worktree-name "feat%2Fx" "r1")))
   (is (= "switchfield/feat%2Fx/r1" (sut/worktree-branch "feat%2Fx" "r1"))))
 
@@ -195,7 +193,7 @@
         kinds #(set (map (juxt :problem :reason) (sut/worktree-problems %)))]
     (is (empty? (sut/worktree-problems base)))
     (testing "nothing is checked when running in place"
-      (is (empty? (sut/worktree-problems (assoc base :worktree? false :run-id "bad/id" :dirty-paths ["x"])))))
+      (is (empty? (sut/worktree-problems (assoc base :worktree? false :dirty-paths ["x"])))))
     (testing "a dirty checkout, unless allowed"
       (is (= #{[:dirty-checkout nil]} (kinds (assoc base :dirty-paths ["a"]))))
       (is (empty? (sut/worktree-problems (assoc base :dirty-paths ["a"] :allow-dirty? true)))))
@@ -210,9 +208,8 @@
              (kinds (assoc base :worktree-facts {:branch-exists? true}))))
       (is (= #{[:worktree-conflict :ref-conflict]}
              (kinds (assoc base :worktree-facts {:ref-conflicts ["switchfield"]})))))
-    (testing "a branch named like the container directory, and a bad run id"
-      (is (contains? (kinds (assoc base :branch "worktrees")) [:reserved-branch-name nil]))
-      (is (contains? (kinds (assoc base :run-id "a/b")) [:invalid-run-id nil])))))
+    (testing "a branch named like the container directory"
+      (is (contains? (kinds (assoc base :branch "worktrees")) [:reserved-branch-name nil])))))
 
 (deftest watcher-violations-test
   (testing "runner state is out of jurisdiction; the rest stops the run"
@@ -282,3 +279,65 @@
                         (with-pipeline [{:agent :impl :prompt :p}
                                         (rev :verdict :f :redirect {:agent :impl}) (rev)] ro))
                        :concurrent-redirect))))))
+
+;; -- Resuming a run --------------------------------------------------------
+
+(def ^:private saved
+  {:baseline-tree "t0"
+   :cursor {:g 3 :redirects {} :context {}}
+   :stages [{:group 0 :fingerprint "f0" :after-tree "t1" :entering {:g 0 :redirects {} :context {}}}
+            {:group 1 :fingerprint "f1" :after-tree "t2" :entering {:g 1 :redirects {} :context {}}}
+            {:group 2 :fingerprint "f2" :after-tree "t3" :entering {:g 2 :redirects {:x 1} :context {:v 1}}}]})
+
+(def ^:private now-same
+  {:fingerprints {0 "f0" 1 "f1" 2 "f2"} :existing-trees #{"t0" "t1" "t2" "t3"}})
+
+(deftest resume-plan-keeps-stages-that-still-match
+  (is (= {:state {:g 3 :redirects {} :context {}} :kept [0 1 2] :restore-to "t3" :problems nil}
+         (sut/resume-plan saved now-same))))
+
+(deftest resume-plan-reruns-from-the-first-stage-that-does-not-match
+  (testing "a changed fingerprint re-runs that stage and every later one, from its entering state"
+    (let [plan (sut/resume-plan saved (assoc-in now-same [:fingerprints 1] "changed"))]
+      (is (= [0] (:kept plan)))
+      (is (= {:g 1 :redirects {} :context {}} (:state plan)))
+      (is (= "t1" (:restore-to plan)))))
+  (testing "a stage whose output tree git has lost is re-run, even when later ones look fine"
+    (let [plan (sut/resume-plan saved (update now-same :existing-trees disj "t2"))]
+      (is (= [0] (:kept plan)))
+      (is (= "t1" (:restore-to plan)))))
+  (testing "the entering state of a re-run stage restores its redirect counts and context"
+    (let [plan (sut/resume-plan saved (assoc-in now-same [:fingerprints 2] "changed"))]
+      (is (= {:g 2 :redirects {:x 1} :context {:v 1}} (:state plan)))))
+  (testing "nothing kept restores the baseline"
+    (let [plan (sut/resume-plan saved (assoc-in now-same [:fingerprints 0] "changed"))]
+      (is (= [] (:kept plan)))
+      (is (= "t0" (:restore-to plan))))))
+
+(deftest resume-plan-reports-lost-state
+  (testing "lost stage trees just shrink what is kept"
+    (is (nil? (:problems (sut/resume-plan saved (update now-same :existing-trees disj "t3"))))))
+  (testing "a baseline git no longer has, with nothing kept, cannot be recovered"
+    (is (= [:saved-state-lost]
+           (map :problem (:problems (sut/resume-plan saved (-> now-same
+                                                               (assoc-in [:fingerprints 0] "changed")
+                                                               (update :existing-trees disj "t0")))))))))
+
+(deftest stage-fingerprint-depends-on-everything-the-stage-uses
+  (let [steps [{:agent :a :prompt :p}]
+        base  {:timetable {:agents {:a {:harness :h :model "m"}} :harnesses {:h {:command "sh"}}}
+               :prompt-texts {:p {:text "P"}} :spec-sha256 "s"}
+        fp    #(sut/stage-fingerprint % steps [0])]
+    (is (= (fp base) (fp base)))
+    (is (not= (fp base) (fp (assoc-in base [:timetable :agents :a :model] "other"))))
+    (is (not= (fp base) (fp (assoc-in base [:timetable :harnesses :h :command] "bash"))))
+    (is (not= (fp base) (fp (assoc-in base [:prompt-texts :p :text] "Q"))))
+    (is (not= (fp base) (fp (assoc base :spec-sha256 "t"))))
+    (testing "an unrelated agent does not matter"
+      (is (= (fp base) (fp (assoc-in base [:timetable :agents :zzz] {:model "x"})))))))
+
+(deftest resume-problems-require-the-same-mode
+  (is (empty? (sut/resume-problems {:saved-run {:worktree? true} :worktree? true})))
+  (is (empty? (sut/resume-problems {:saved-run {:worktree? true} :worktree? false :restart? true})))
+  (is (empty? (sut/resume-problems {:worktree? false})))
+  (is (= [:run-mode-mismatch] (map :problem (sut/resume-problems {:saved-run {:worktree? true} :worktree? false})))))

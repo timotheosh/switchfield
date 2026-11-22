@@ -22,6 +22,8 @@
   (assoc opts
          :lib lib :main main
          :uber-file (format "target/%s-%s.jar" lib version)
+         ;; Datalevin needs these opened; `java -jar` has no jvm-opts of its own.
+         :manifest {"Add-Opens" "java.base/java.nio java.base/sun.nio.ch"}
          :basis (b/create-basis {})
          :class-dir class-dir
          :src-dirs ["src"]

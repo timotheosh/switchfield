@@ -111,11 +111,6 @@
   encoded name equals it would collide."
   "worktrees")
 
-(defn valid-run-id?
-  "A run id becomes a path and a branch component, so it is restricted."
-  [id]
-  (boolean (and (string? id) (re-matches #"[A-Za-z0-9][A-Za-z0-9._-]*" id))))
-
 (defn worktree-name
   "Calculate the worktree directory name for a run."
   [encoded-branch run-id]
@@ -128,18 +123,16 @@
 
 (defn worktree-problems
   "Calculate the problems that stop a worktree run from being set up. ctx:
-  :worktree? :branch :run-id :allow-dirty? :dirty-paths and :worktree-facts
+  :worktree? :branch :allow-dirty? :dirty-paths and :worktree-facts
   ({:registered? :dir-exists? :branch-exists? :ref-conflicts}). A worktree that
   is already registered is re-used, so it skips the conflict and dirty checks."
-  [{:keys [worktree? branch run-id allow-dirty? dirty-paths worktree-facts]}]
+  [{:keys [worktree? branch allow-dirty? dirty-paths worktree-facts]}]
   (when worktree?
     (let [{:keys [registered? dir-exists? branch-exists? ref-conflicts]} worktree-facts]
       (concat
        (when (and branch (= worktrees-dir (encode-branch branch)))
          [{:problem :reserved-branch-name :branch branch}])
-       (when-not (valid-run-id? run-id)
-         [{:problem :invalid-run-id :run-id run-id}])
-       (when (and (valid-run-id? run-id) (not registered?))
+       (when-not registered?
          (concat
           (when dir-exists?
             [{:problem :worktree-conflict :reason :unregistered-directory}])
@@ -149,6 +142,58 @@
             {:problem :worktree-conflict :reason :ref-conflict :ref r})))
        (when (and (seq dirty-paths) (not allow-dirty?) (not registered?))
          [{:problem :dirty-checkout :paths (vec dirty-paths)}])))))
+
+(declare canonical)
+
+;; -- Resuming a run -------------------------------------------------------
+
+(defn stage-fingerprint
+  "Calculate everything a stage's result depends on, as data: its steps, their
+  agents and harnesses, the prompt texts they use, and the specification hash.
+  A saved stage may be skipped only while this is unchanged."
+  [{:keys [timetable prompt-texts spec-sha256]} steps indexes]
+  (let [members (map #(nth steps %) indexes)
+        agents  (distinct (keep :agent members))]
+    (canonical
+     {:steps    (vec members)
+      :agents   (select-keys (:agents timetable) agents)
+      :harnesses (select-keys (:harnesses timetable)
+                              (keep #(get-in timetable [:agents % :harness]) agents))
+      :prompts  (select-keys prompt-texts (keep :prompt members))
+      :spec     spec-sha256})))
+
+(defn resume-plan
+  "Calculate how to continue a saved run. `saved`: :baseline-tree :cursor and
+  :stages in completion order, each {:group :fingerprint :entering :after-tree}.
+  `current`: :fingerprints (the hash of each group now) and :existing-trees
+  (the saved trees git still has). A saved stage is kept only when its
+  fingerprint still matches and its recorded output tree still exists; the
+  first stage that fails either test is run again, with everything after it.
+  Returns :state (the loop state to continue from), :kept (the groups
+  skipped), :restore-to (the tree the work dir must have before anything is
+  dispatched) and :problems."
+  [{:keys [baseline-tree cursor stages]} {:keys [fingerprints existing-trees]}]
+  (let [kept    (vec (take-while (fn [{:keys [group fingerprint after-tree]}]
+                                   (and (= fingerprint (get fingerprints group))
+                                        (contains? existing-trees after-tree)))
+                                 stages))
+        redo    (nth stages (count kept) nil)
+        restore (if (seq kept) (:after-tree (peek kept)) baseline-tree)]
+    {:state      (if redo (:entering redo) cursor)
+     :kept       (mapv :group kept)
+     :restore-to restore
+     :problems   (when-not (contains? existing-trees restore)
+                   [{:problem :saved-state-lost :tree restore
+                     :message "git no longer has the saved work; restart with --restart"}])}))
+
+(defn resume-problems
+  "Calculate the problems of picking up a saved run: it must have run in the
+  same mode (a worktree or in place) unless it is being restarted."
+  [{:keys [saved-run worktree? restart?]}]
+  (when (and saved-run (not restart?)
+             (not= (boolean worktree?) (boolean (:worktree? saved-run))))
+    [{:problem :run-mode-mismatch :worktree? (boolean (:worktree? saved-run))
+      :message "the unfinished run used the other mode; rerun with the same mode, or --restart"}]))
 
 ;; -- Prompt composition -------------------------------------------------
 
@@ -394,14 +439,17 @@
 (defn pipeline-problems
   "Calculate every problem that makes a pipeline unrunnable, as data (empty
   when runnable). ctx: :config :timetable :pipeline-name :branch :spec
-  :prompt-texts, and :writes-fs ({prefix :dir|:file|:missing}, what exists on
-  disk for each of the writes list)."
+  :prompt-texts, :writes-fs ({prefix :dir|:file|:missing}, what exists on
+  disk for each of the writes list), and for a saved run :saved-run
+  :restart? and :resume-plan."
   [{:keys [timetable pipeline-name branch prompt-texts writes-fs] :as ctx}]
   (let [steps (get-in timetable [:pipelines pipeline-name :steps])]
     (vec
      (concat
       (when-not branch [{:problem :detached-head}])
       (worktree-problems ctx)
+      (resume-problems ctx)
+      (:problems (:resume-plan ctx))
       (for [[prefix kind] (sort-by key writes-fs) :when (= :file kind)]
         {:problem :writes-not-directory :prefix prefix})
       (if-not steps
